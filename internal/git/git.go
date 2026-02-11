@@ -20,15 +20,10 @@ func Cmd(args ...string) (string, error) {
 // it finds the merge commit on the branch's first-parent line and uses its
 // first parent to compute the correct divergence point.
 func MergeBase(branch string) (string, error) {
-	// Resolve the branch ref: try local first, fall back to origin/<branch> for CI
 	ref := branch
 	base, err := Cmd("merge-base", "HEAD", ref)
 	if err != nil {
-		ref = "origin/" + branch
-		base, err = Cmd("merge-base", "HEAD", ref)
-		if err != nil {
-			return "", err
-		}
+		return "", err
 	}
 
 	head, err := Cmd("rev-parse", "HEAD")

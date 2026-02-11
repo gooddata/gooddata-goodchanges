@@ -42,10 +42,20 @@ func main() {
 	analyzer.Debug = flagDebug
 	analyzer.IncludeCSS = flagIncludeCSS
 
-	mergeBase, err := git.MergeBase("master")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error finding merge-base with master: %v\n", err)
-		os.Exit(1)
+	var mergeBase string
+	if commit := os.Getenv("COMPARE_COMMIT"); commit != "" {
+		mergeBase = commit
+	} else {
+		compareBranch := os.Getenv("COMPARE_BRANCH")
+		if compareBranch == "" {
+			compareBranch = "origin/master"
+		}
+		var err error
+		mergeBase, err = git.MergeBase(compareBranch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding merge-base with %s: %v\n", compareBranch, err)
+			os.Exit(1)
+		}
 	}
 
 	changedFiles, err := git.ChangedFilesSince(mergeBase)
