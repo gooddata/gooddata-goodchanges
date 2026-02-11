@@ -20,9 +20,15 @@ func Cmd(args ...string) (string, error) {
 // it finds the merge commit on the branch's first-parent line and uses its
 // first parent to compute the correct divergence point.
 func MergeBase(branch string) (string, error) {
-	base, err := Cmd("merge-base", "HEAD", branch)
+	// Resolve the branch ref: try local first, fall back to origin/<branch> for CI
+	ref := branch
+	base, err := Cmd("merge-base", "HEAD", ref)
 	if err != nil {
-		return "", err
+		ref = "origin/" + branch
+		base, err = Cmd("merge-base", "HEAD", ref)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	head, err := Cmd("rev-parse", "HEAD")
@@ -37,7 +43,7 @@ func MergeBase(branch string) (string, error) {
 		// List all merge commits in ancestry order (oldest first with --reverse).
 		// NOTE: -1 cannot be combined with --reverse (git applies -1 before reversing),
 		// so we get all results and take the first line.
-		mergeList, err := Cmd("log", "--ancestry-path", head+".."+branch,
+		mergeList, err := Cmd("log", "--ancestry-path", head+".."+ref,
 			"--merges", "--first-parent", "--reverse", "--pretty=%H")
 		if err != nil || mergeList == "" {
 			return base, nil
