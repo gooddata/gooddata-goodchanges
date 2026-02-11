@@ -1,0 +1,170 @@
+# (C) 2025 GoodData Corporation
+
+name: vendor ~ upgrade
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'typescript-go commit hash to vendor (leave "latest" for newest main)'
+        required: true
+        default: 'latest'
+        type: string
+
+jobs:
+  upgrade:
+    runs-on:
+      group: infra1-runners-arc
+      labels: runners-mxa-2xlarge
+    outputs:
+      pr-url: ${{ steps.create-pr.outputs.pr-url }}
+      commit_hash: ${{ steps.resolve-hash.outputs.commit_hash }}
+      has_changes: ${{ steps.create-branch.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.TOKEN_GITHUB_YENKINS }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Get Go version
+        id: go-version
+        run: |
+          GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+          echo "version=$GO_VERSION" >> $GITHUB_OUTPUT
+          echo "Go version: $GO_VERSION"
+
+      - name: Resolve commit hash
+        id: resolve-hash
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN_GITHUB_YENKINS }}
+        run: |
+          INPUT="${{ inputs.commit_hash }}"
+          if [[ "$INPUT" == "latest" ]]; then
+            HASH=$(gh api repos/microsoft/typescript-go/commits/main --jq '.sha')
+            echo "Resolved latest to $HASH"
+          else
+            HASH="$INPUT"
+            echo "Using provided hash $HASH"
+          fi
+          echo "commit_hash=$HASH" >> $GITHUB_OUTPUT
+          echo "short_hash=${HASH:0:12}" >> $GITHUB_OUTPUT
+
+      - name: Update TSGO_COMMIT and vendor
+        run: |
+          HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
+          printf '%s' "$HASH" > TSGO_COMMIT
+          echo "Pinned TSGO_COMMIT to $HASH"
+          bash vendor-tsgo.sh
+
+      - name: Update Dockerfile Go version
+        run: |
+          GO_VERSION="${{ steps.go-version.outputs.version }}"
+          sed -i "s|golang:[0-9.]*-alpine|golang:${GO_VERSION}-alpine|g" Dockerfile
+          echo "Updated Dockerfile to Go version $GO_VERSION"
+          cat Dockerfile
+
+      - name: Update go.mod Go version
+        run: |
+          GO_VERSION="${{ steps.go-version.outputs.version }}"
+          go mod edit -go="${GO_VERSION}"
+          echo "Updated go.mod to Go $GO_VERSION"
+
+      - name: Tidy go modules
+        run: go mod tidy
+
+      - name: Delete remote branch if exists
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN_GITHUB_YENKINS }}
+        run: |
+          SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
+          BRANCH_NAME="vendor-upgrade-${SHORT}"
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME"; then
+            echo "Branch exists on remote, deleting..."
+            git push origin --delete "$BRANCH_NAME"
+          else
+            echo "Branch does not exist on remote"
+          fi
+
+      - name: Create branch and commit changes
+        id: create-branch
+        run: |
+          SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
+          HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
+          BRANCH_NAME="vendor-upgrade-${SHORT}"
+          COMMIT_TITLE="chore: Upgrade vendored typescript-go to ${SHORT}"
+
+          git config user.name "git-action"
+          git config user.email "git-action@gooddata.com"
+
+          git checkout -b "$BRANCH_NAME"
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git commit -m "$COMMIT_TITLE" -m "risk: low" --no-verify
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "commit_title=$COMMIT_TITLE" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Push branch
+        if: steps.create-branch.outputs.has_changes == 'true'
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 5
+          retry_wait_seconds: 10
+          command: git push origin ${{ steps.create-branch.outputs.branch_name }}
+
+      - name: Create Pull Request
+        if: steps.create-branch.outputs.has_changes == 'true'
+        id: create-pr
+        uses: ./.github/actions/github/create-pr
+        with:
+          title: ${{ steps.create-branch.outputs.commit_title }}
+          body: |
+            Automated upgrade of vendored typescript-go to [`${{ steps.resolve-hash.outputs.short_hash }}`](https://github.com/microsoft/typescript-go/commit/${{ steps.resolve-hash.outputs.commit_hash }})
+          base: master
+          head: ${{ steps.create-branch.outputs.branch_name }}
+          github-token: ${{ secrets.TOKEN_GITHUB_YENKINS }}
+          reviewers: martinnaj
+
+  notify-failed-to-slack:
+    if: ${{ !cancelled() && needs.upgrade.result == 'failure' }}
+    needs:
+      - upgrade
+    runs-on:
+      group: infra1-runners-arc
+      labels: runners-small
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.27.1
+        with:
+          channel-id: '#javascript-notifications'
+          slack-message: ":robot_panic: `goodchanges vendor-upgrade:` *failed*; please check *<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|the logs>*."
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  notify-success-to-slack:
+    if: ${{ !cancelled() && needs.upgrade.result == 'success' && needs.upgrade.outputs.has_changes == 'true' }}
+    needs:
+      - upgrade
+    runs-on:
+      group: infra1-runners-arc
+      labels: runners-small
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.27.1
+        with:
+          channel-id: '#javascript-notifications'
+          slack-message: ":white_check_mark: `goodchanges vendor-upgrade:` *success*; upgraded typescript-go to *${{ needs.upgrade.outputs.commit_hash }}*. PR: ${{ needs.upgrade.outputs.pr-url }}"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
