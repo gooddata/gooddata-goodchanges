@@ -244,7 +244,11 @@ func main() {
 	// Load project configs and detect affected targets.
 	// Targets are defined by "type": "target" in .goodchangesrc.json.
 	// Virtual targets are defined by "type": "virtual-target".
-	changedE2E := make(map[string]bool)
+	type TargetResult struct {
+		Name       string   `json:"name"`
+		Detections []string `json:"detections,omitempty"`
+	}
+	changedE2E := make(map[string]*TargetResult)
 
 	for _, rp := range rushConfig.Projects {
 		cfg := rush.LoadProjectConfig(rp.ProjectFolder)
@@ -261,28 +265,30 @@ func main() {
 			}
 
 			// Condition 1: Direct file changes
+			triggered := false
 			for _, f := range changedFiles {
 				if strings.HasPrefix(f, rp.ProjectFolder+"/") {
 					relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
 					if !cfg.IsIgnored(relPath) {
-						changedE2E[rp.PackageName] = true
+						triggered = true
 						break
 					}
 				}
 			}
-			if changedE2E[rp.PackageName] {
+			if triggered {
+				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 				continue
 			}
 
 			// Condition 2: External dep changes in lockfile
 			if len(depChangedDeps[rp.ProjectFolder]) > 0 {
-				changedE2E[rp.PackageName] = true
+				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 				continue
 			}
 
 			// Condition 3: Tainted workspace imports
 			if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, cfg) {
-				changedE2E[rp.PackageName] = true
+				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 				continue
 			}
 
@@ -291,55 +297,84 @@ func main() {
 				appInfo := projectMap[*cfg.App]
 				if appInfo != nil {
 					if changedProjects[*cfg.App] != nil {
-						changedE2E[rp.PackageName] = true
+						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 						continue
 					}
 					if len(depChangedDeps[appInfo.ProjectFolder]) > 0 {
-						changedE2E[rp.PackageName] = true
+						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 						continue
 					}
 					if analyzer.HasTaintedImports(appInfo.ProjectFolder, allUpstreamTaint, nil) {
-						changedE2E[rp.PackageName] = true
+						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 						continue
 					}
 				}
 			}
 		} else if cfg.IsVirtualTarget() && cfg.TargetName != nil {
-			// Virtual target: check changeDirs for file changes or tainted imports
-			triggered := false
-			for _, dir := range cfg.ChangeDirs {
-				fullDir := filepath.Join(rp.ProjectFolder, dir)
-				for _, f := range changedFiles {
-					if strings.HasPrefix(f, fullDir+"/") {
-						triggered = true
-						break
+			// Virtual target: check changeDirs for file changes or tainted imports.
+			// Normal dirs trigger a full run; fine-grained dirs collect specific affected files.
+			normalTriggered := false
+			var fineGrainedDetections []string
+
+			for _, cd := range cfg.ChangeDirs {
+				fullDir := filepath.Join(rp.ProjectFolder, cd.Path)
+
+				if cd.IsFineGrained() {
+					detected := analyzer.FindAffectedFiles(cd.Path, allUpstreamTaint, changedFiles, rp.ProjectFolder)
+					if len(detected) > 0 {
+						fineGrainedDetections = append(fineGrainedDetections, detected...)
+					}
+				} else {
+					// Normal: check for any file changes or tainted imports
+					for _, f := range changedFiles {
+						if strings.HasPrefix(f, fullDir+"/") {
+							normalTriggered = true
+							break
+						}
+					}
+					if !normalTriggered {
+						if analyzer.HasTaintedImports(fullDir, allUpstreamTaint, nil) {
+							normalTriggered = true
+						}
 					}
 				}
-				if triggered {
-					break
-				}
-				if analyzer.HasTaintedImports(fullDir, allUpstreamTaint, nil) {
-					triggered = true
+				if normalTriggered {
 					break
 				}
 			}
-			if triggered {
-				changedE2E[*cfg.TargetName] = true
+
+			if normalTriggered {
+				changedE2E[*cfg.TargetName] = &TargetResult{Name: *cfg.TargetName}
+			} else if len(fineGrainedDetections) > 0 {
+				sort.Strings(fineGrainedDetections)
+				changedE2E[*cfg.TargetName] = &TargetResult{
+					Name:       *cfg.TargetName,
+					Detections: fineGrainedDetections,
+				}
 			}
 		}
 	}
 
-	// Build sorted list of affected e2e packages
-	e2eList := make([]string, 0, len(changedE2E))
-	for name := range changedE2E {
-		e2eList = append(e2eList, name)
+	// Build sorted list of affected targets
+	e2eList := make([]*TargetResult, 0, len(changedE2E))
+	for _, result := range changedE2E {
+		e2eList = append(e2eList, result)
 	}
-	sort.Strings(e2eList)
+	sort.Slice(e2eList, func(i, j int) bool {
+		return e2eList[i].Name < e2eList[j].Name
+	})
 
 	if flagLog {
 		logf("Affected e2e packages (%d):\n", len(e2eList))
-		for _, name := range e2eList {
-			logf("  - %s\n", name)
+		for _, result := range e2eList {
+			if len(result.Detections) > 0 {
+				logf("  - %s (fine-grained: %d files)\n", result.Name, len(result.Detections))
+				for _, d := range result.Detections {
+					logf("      %s\n", d)
+				}
+			} else {
+				logf("  - %s\n", result.Name)
+			}
 		}
 	}
 

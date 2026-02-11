@@ -35,9 +35,17 @@ BINDIR=~/.local/bin ./install.sh v0.2.5
 
 ## Output
 
+JSON array of target objects:
+
 ```json
-["gdc-dashboards-e2e", "home-ui-e2e", "sdk-ui-tests-e2e"]
+[
+  {"name": "gdc-dashboards-e2e"},
+  {"name": "neobackstop", "detections": ["stories/Button.stories.tsx", "stories/Dialog.stories.tsx"]}
+]
 ```
+
+- Normal targets and fully-triggered virtual targets: `{"name": "..."}`
+- Virtual targets where only fine-grained directories detected changes: `{"name": "...", "detections": ["..."]}` with the specific affected file paths
 
 ## Environment variables
 
@@ -91,15 +99,31 @@ An aggregated target that watches specific directories across a project. Does no
 ```json
 {
   "type": "virtual-target",
-  "targetName": "sdk-ui-tests-e2e",
-  "changeDirs": ["scenarios", "stories"]
+  "targetName": "neobackstop",
+  "changeDirs": [
+    { "path": "src" },
+    { "path": "scenarios" },
+    { "path": "stories", "type": "fine-grained" },
+    { "path": "neobackstop" }
+  ]
 }
 ```
 
-**Trigger conditions:**
+Each `changeDirs` entry is an object with:
 
-- Any file in a `changeDirs` directory is changed
-- Any file in a `changeDirs` directory imports a tainted symbol
+- `path` -- directory to watch (relative to project root)
+- `type` -- optional, set to `"fine-grained"` for granular file-level detection
+
+**Normal directories** (no `type` or omitted): any file change or tainted import triggers a full run.
+
+**Fine-grained directories** (`"type": "fine-grained"`): instead of triggering a full run, collects the specific affected files. A file is affected if it:
+- Was directly changed
+- Imports tainted symbols from upstream workspace libraries
+- Imports from a file that is affected (transitive within the directory)
+
+**Output behavior:**
+- If any **normal** directory triggers: `{"name": "neobackstop"}` (full run, no detections)
+- If **only fine-grained** directories have detections: `{"name": "neobackstop", "detections": ["stories/Button.stories.tsx"]}` (specific files)
 
 ### Fields reference
 
@@ -108,7 +132,7 @@ An aggregated target that watches specific directories across a project. Does no
 | `type` | `"target"` \| `"virtual-target"` | Both | Declares what kind of target this project is |
 | `app` | `string` | Target | Package name of the corresponding app this e2e package tests |
 | `targetName` | `string` | Virtual target | Output name emitted when the virtual target is triggered |
-| `changeDirs` | `string[]` | Virtual target | Directories (relative to project root) to watch for changes |
+| `changeDirs` | `ChangeDir[]` | Virtual target | Directories to watch. Each entry: `{"path": "...", "type?": "fine-grained"}` |
 | `ignores` | `string[]` | Both | Glob patterns for files to exclude from change detection |
 
 The `.goodchangesrc.json` file itself is always ignored.

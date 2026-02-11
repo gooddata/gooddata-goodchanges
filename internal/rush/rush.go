@@ -105,12 +105,22 @@ func BuildProjectMap(config *Config) map[string]*ProjectInfo {
 	return projectMap
 }
 
+type ChangeDir struct {
+	Path string  `json:"path"`
+	Type *string `json:"type,omitempty"` // nil = normal, "fine-grained"
+}
+
+// IsFineGrained returns true if this changeDir is configured for fine-grained detection.
+func (cd ChangeDir) IsFineGrained() bool {
+	return cd.Type != nil && *cd.Type == "fine-grained"
+}
+
 type ProjectConfig struct {
-	Type       *string  `json:"type,omitempty"`       // "target", "virtual-target"
-	App        *string  `json:"app,omitempty"`        // rush project name of corresponding app
-	TargetName *string  `json:"targetName,omitempty"` // output name for virtual targets
-	ChangeDirs []string `json:"changeDirs,omitempty"` // dirs to watch for virtual targets
-	Ignores    []string `json:"ignores,omitempty"`
+	Type       *string     `json:"type,omitempty"`       // "target", "virtual-target"
+	App        *string     `json:"app,omitempty"`        // rush project name of corresponding app
+	TargetName *string     `json:"targetName,omitempty"` // output name for virtual targets
+	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // dirs to watch for virtual targets
+	Ignores    []string    `json:"ignores,omitempty"`
 }
 
 // LoadProjectConfig reads .goodchangesrc.json from the project folder.
