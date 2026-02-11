@@ -215,119 +215,92 @@ func main() {
 		analyzer.PropagateCSSTaint(rushConfig, projectMap, allUpstreamTaint)
 	}
 
-	// Collect affected e2e packages with precise 4-condition detection.
-	// For each e2e/ project (non-library), check:
-	//   1. Direct file changes (outside .goodchangesrc.json ignores)
-	//   2. External dep changes in lockfile
-	//   3. Tainted workspace imports into the e2e project
-	//   4. Corresponding app is tainted (directly changed, lockfile deps, or tainted imports)
+	// Load project configs and detect affected targets.
+	// Targets are defined by "type": "target" in .goodchangesrc.json.
+	// Virtual targets are defined by "type": "virtual-target".
 	changedE2E := make(map[string]bool)
+
 	for _, rp := range rushConfig.Projects {
-		if !strings.HasPrefix(rp.ProjectFolder, "e2e/") {
-			continue
-		}
-		info := projectMap[rp.PackageName]
-		if info == nil {
-			continue
-		}
-		if analyzer.IsLibrary(info.Package) {
-			continue // e.g. e2e-utils is a library, not an e2e test package
-		}
+		cfg := rush.LoadProjectConfig(rp.ProjectFolder)
 
-		ignoreCfg := rush.LoadIgnoreConfig(rp.ProjectFolder)
+		if cfg.IsTarget() {
+			// Target detection with 4 conditions:
+			//   1. Direct file changes (outside ignores)
+			//   2. External dep changes in lockfile
+			//   3. Tainted workspace imports
+			//   4. Corresponding app is tainted
+			info := projectMap[rp.PackageName]
+			if info == nil {
+				continue
+			}
 
-		// Condition 1: Direct file changes (outside ignores)
-		for _, f := range changedFiles {
-			if strings.HasPrefix(f, rp.ProjectFolder+"/") {
-				relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
-				if !ignoreCfg.IsIgnored(relPath) {
-					changedE2E[rp.PackageName] = true
+			// Condition 1: Direct file changes
+			for _, f := range changedFiles {
+				if strings.HasPrefix(f, rp.ProjectFolder+"/") {
+					relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
+					if !cfg.IsIgnored(relPath) {
+						changedE2E[rp.PackageName] = true
+						break
+					}
+				}
+			}
+			if changedE2E[rp.PackageName] {
+				continue
+			}
+
+			// Condition 2: External dep changes in lockfile
+			if len(depChangedDeps[rp.ProjectFolder]) > 0 {
+				changedE2E[rp.PackageName] = true
+				continue
+			}
+
+			// Condition 3: Tainted workspace imports
+			if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, cfg) {
+				changedE2E[rp.PackageName] = true
+				continue
+			}
+
+			// Condition 4: Corresponding app is tainted
+			if cfg.App != nil {
+				appInfo := projectMap[*cfg.App]
+				if appInfo != nil {
+					if changedProjects[*cfg.App] != nil {
+						changedE2E[rp.PackageName] = true
+						continue
+					}
+					if len(depChangedDeps[appInfo.ProjectFolder]) > 0 {
+						changedE2E[rp.PackageName] = true
+						continue
+					}
+					if analyzer.HasTaintedImports(appInfo.ProjectFolder, allUpstreamTaint, nil) {
+						changedE2E[rp.PackageName] = true
+						continue
+					}
+				}
+			}
+		} else if cfg.IsVirtualTarget() && cfg.TargetName != nil {
+			// Virtual target: check changeDirs for file changes or tainted imports
+			triggered := false
+			for _, dir := range cfg.ChangeDirs {
+				fullDir := filepath.Join(rp.ProjectFolder, dir)
+				for _, f := range changedFiles {
+					if strings.HasPrefix(f, fullDir+"/") {
+						triggered = true
+						break
+					}
+				}
+				if triggered {
+					break
+				}
+				if analyzer.HasTaintedImports(fullDir, allUpstreamTaint, nil) {
+					triggered = true
 					break
 				}
 			}
-		}
-		if changedE2E[rp.PackageName] {
-			continue
-		}
-
-		// Condition 2: External dep changes in lockfile
-		if len(depChangedDeps[rp.ProjectFolder]) > 0 {
-			changedE2E[rp.PackageName] = true
-			continue
-		}
-
-		// Condition 3: Tainted workspace imports (filtered by ignores)
-		if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, ignoreCfg) {
-			changedE2E[rp.PackageName] = true
-			continue
-		}
-
-		// Condition 4: Corresponding app is tainted
-		for _, dep := range info.DependsOn {
-			depInfo := projectMap[dep]
-			if depInfo == nil {
-				continue
-			}
-			if analyzer.IsLibrary(depInfo.Package) {
-				continue // only check app dependencies
-			}
-			// App is tainted if: directly changed, lockfile dep changes, or tainted workspace imports
-			if changedProjects[dep] != nil {
-				changedE2E[rp.PackageName] = true
-				break
-			}
-			if len(depChangedDeps[depInfo.ProjectFolder]) > 0 {
-				changedE2E[rp.PackageName] = true
-				break
-			}
-			if analyzer.HasTaintedImports(depInfo.ProjectFolder, allUpstreamTaint, nil) {
-				changedE2E[rp.PackageName] = true
-				break
+			if triggered {
+				changedE2E[*cfg.TargetName] = true
 			}
 		}
-	}
-	// sdk-ui-tests-e2e lives in sdk/libs/, not e2e/ — separate detection
-	if changedProjects["@gooddata/sdk-ui-tests-e2e"] != nil {
-		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
-	}
-	if len(depChangedDeps["sdk/libs/sdk-ui-tests-e2e"]) > 0 {
-		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
-	}
-	// Check if sdk-ui-tests-e2e's scenarios app imports any tainted exports
-	if analyzer.HasTaintedImports("sdk/libs/sdk-ui-tests-e2e", allUpstreamTaint, nil) {
-		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
-	}
-
-	// Neobackstop detection: triggered if any files in specific sdk-ui-tests dirs
-	// are modified, or if any of those dirs import tainted exports.
-	neobackstopDirs := []string{
-		"sdk/libs/sdk-ui-tests/src",
-		"sdk/libs/sdk-ui-tests/scenarios",
-		"sdk/libs/sdk-ui-tests/stories",
-		"sdk/libs/sdk-ui-tests/neobackstop",
-	}
-	showNeobackstop := false
-	for _, f := range changedFiles {
-		for _, dir := range neobackstopDirs {
-			if strings.HasPrefix(f, dir+"/") {
-				showNeobackstop = true
-				break
-			}
-		}
-		if showNeobackstop {
-			break
-		}
-	}
-	if !showNeobackstop {
-		for _, dir := range neobackstopDirs {
-			if analyzer.HasTaintedImports(dir, allUpstreamTaint, nil) {
-				showNeobackstop = true
-				break
-			}
-		}
-	}
-	if showNeobackstop {
-		changedE2E["neobackstop"] = true
 	}
 
 	// Build sorted list of affected e2e packages

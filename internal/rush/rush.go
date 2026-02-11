@@ -105,18 +105,22 @@ func BuildProjectMap(config *Config) map[string]*ProjectInfo {
 	return projectMap
 }
 
-type IgnoreConfig struct {
-	Ignores []string `json:"ignores"`
+type ProjectConfig struct {
+	Type       *string  `json:"type,omitempty"`       // "target", "virtual-target"
+	App        *string  `json:"app,omitempty"`        // rush project name of corresponding app
+	TargetName *string  `json:"targetName,omitempty"` // output name for virtual targets
+	ChangeDirs []string `json:"changeDirs,omitempty"` // dirs to watch for virtual targets
+	Ignores    []string `json:"ignores,omitempty"`
 }
 
-// LoadIgnoreConfig reads .goodchangesrc.json from the project folder.
+// LoadProjectConfig reads .goodchangesrc.json from the project folder.
 // Returns nil if the file doesn't exist.
-func LoadIgnoreConfig(projectFolder string) *IgnoreConfig {
+func LoadProjectConfig(projectFolder string) *ProjectConfig {
 	data, err := os.ReadFile(filepath.Join(projectFolder, ".goodchangesrc.json"))
 	if err != nil {
 		return nil
 	}
-	var cfg IgnoreConfig
+	var cfg ProjectConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil
 	}
@@ -124,18 +128,26 @@ func LoadIgnoreConfig(projectFolder string) *IgnoreConfig {
 }
 
 // IsIgnored checks if a file path (relative to project root) matches any ignore glob.
-// Globs are matched against just the relative path from the project root,
-// so "README.md" matches only at the root, not in subdirectories.
-func (ic *IgnoreConfig) IsIgnored(relPath string) bool {
-	if ic == nil {
+func (pc *ProjectConfig) IsIgnored(relPath string) bool {
+	if pc == nil {
 		return false
 	}
-	for _, pattern := range ic.Ignores {
+	for _, pattern := range pc.Ignores {
 		if matched, _ := filepath.Match(pattern, relPath); matched {
 			return true
 		}
 	}
 	return false
+}
+
+// IsTarget returns true if this project is configured as a target (e2e test package).
+func (pc *ProjectConfig) IsTarget() bool {
+	return pc != nil && pc.Type != nil && *pc.Type == "target"
+}
+
+// IsVirtualTarget returns true if this project is configured as a virtual target.
+func (pc *ProjectConfig) IsVirtualTarget() bool {
+	return pc != nil && pc.Type != nil && *pc.Type == "virtual-target"
 }
 
 // FindChangedProjects determines which projects have files in the changed file list.
@@ -149,8 +161,8 @@ func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, cha
 		for _, rp := range config.Projects {
 			if strings.HasPrefix(file, rp.ProjectFolder+"/") {
 				relPath := strings.TrimPrefix(file, rp.ProjectFolder+"/")
-				ignoreCfg := LoadIgnoreConfig(rp.ProjectFolder)
-				if ignoreCfg.IsIgnored(relPath) {
+				cfg := LoadProjectConfig(rp.ProjectFolder)
+				if cfg.IsIgnored(relPath) {
 					break
 				}
 				if _, exists := result[rp.PackageName]; !exists {
