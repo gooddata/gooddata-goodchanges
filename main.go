@@ -194,7 +194,7 @@ func main() {
 		if info == nil {
 			continue
 		}
-		if strings.HasPrefix(info.ProjectFolder, "e2e/") {
+		if strings.HasPrefix(info.ProjectFolder, "e2e/") && !analyzer.IsLibrary(info.Package) {
 			changedE2E[pkgName] = true
 		}
 		// sdk-ui-tests-e2e lives in sdk/libs/, not e2e/ — detect direct changes
