@@ -77,12 +77,10 @@ type importEdge struct {
 }
 
 // AnalyzeLibraryPackage builds a full internal file dependency graph,
-// then propagates taint from changed files through unlimited hops.
-func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffText string, includeTypes bool) ([]AffectedExport, error) {
+// then propagates taint from changed files and upstream dependencies through unlimited hops.
+// upstreamTaint maps import specifiers (e.g. "@gooddata/sdk-ui-kit") to sets of affected export names.
+func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffText string, includeTypes bool, upstreamTaint map[string]map[string]bool) ([]AffectedExport, error) {
 	fileDiffs := diff.ParseFiles(diffText)
-	if len(fileDiffs) == 0 {
-		return nil, nil
-	}
 
 	// Glob and parse ALL source files in the package
 	allFiles, err := globSourceFiles(projectFolder)
@@ -101,7 +99,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 		fileAnalyses[stem] = analysis
 	}
 
-	// Build import graph
+	// Build import graph (relative imports only)
 	importGraph := make(map[string][]importEdge)
 
 	for stem, analysis := range fileAnalyses {
@@ -148,9 +146,62 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 		}
 		affected := tsparse.FindAffectedSymbols(analysis, fd.ChangedLines, includeTypes)
 		if len(affected) > 0 {
-			tainted[stem] = make(map[string]bool)
+			if tainted[stem] == nil {
+				tainted[stem] = make(map[string]bool)
+			}
 			for _, s := range affected {
 				tainted[stem][s] = true
+			}
+		}
+	}
+
+	// Seed taint from upstream dependencies (cross-package propagation)
+	if len(upstreamTaint) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				affectedNames, ok := upstreamTaint[imp.Source]
+				if !ok || len(affectedNames) == 0 {
+					continue
+				}
+				var taintedLocalNames []string
+				for _, name := range imp.Names {
+					if strings.HasPrefix(name, "*:") {
+						// Namespace import — any upstream taint means the namespace is tainted
+						taintedLocalNames = append(taintedLocalNames, name)
+					} else if affectedNames[name] {
+						taintedLocalNames = append(taintedLocalNames, name)
+					}
+				}
+				if len(taintedLocalNames) == 0 {
+					continue
+				}
+				// Find which symbols in this file use the tainted imports
+				usageTainted := findTaintedSymbolsByUsage(analysis, taintedLocalNames)
+				// Also check if any tainted local names are directly re-exported
+				for _, exp := range analysis.Exports {
+					if exp.Source == "" {
+						for _, tln := range taintedLocalNames {
+							cleanName := tln
+							if strings.HasPrefix(cleanName, "*:") {
+								cleanName = strings.TrimPrefix(cleanName, "*:")
+							}
+							if exp.LocalName == cleanName {
+								usageTainted = append(usageTainted, exp.Name)
+							}
+						}
+					}
+				}
+				if len(usageTainted) > 0 {
+					if tainted[stem] == nil {
+						tainted[stem] = make(map[string]bool)
+					}
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
+				}
 			}
 		}
 	}
