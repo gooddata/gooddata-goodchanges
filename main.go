@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +19,12 @@ var flagIncludeCSS bool
 var flagLog bool
 var flagDebug bool
 
-// logf prints to stdout only when --log or --debug is set.
+// envBool returns true if the environment variable is set to a non-empty value.
+func envBool(key string) bool {
+	return os.Getenv(key) != ""
+}
+
+// logf prints to stdout only when LOG or DEBUG is set.
 func logf(format string, args ...interface{}) {
 	if flagLog {
 		fmt.Printf(format, args...)
@@ -28,13 +32,12 @@ func logf(format string, args ...interface{}) {
 }
 
 func main() {
-	flag.BoolVar(&flagIncludeTypes, "include-types", false, "Include type/interface-only changes in analysis")
-	flag.BoolVar(&flagIncludeCSS, "include-css", false, "Track CSS/SCSS changes and propagate taint through style imports")
-	flag.BoolVar(&flagLog, "log", false, "Print per-level, per-package analysis output")
-	flag.BoolVar(&flagDebug, "debug", false, "Print detailed debug logs to stderr (implies --log)")
-	flag.Parse()
+	flagIncludeTypes = envBool("INCLUDE_TYPES")
+	flagIncludeCSS = envBool("INCLUDE_CSS")
+	flagLog = envBool("LOG")
+	flagDebug = envBool("DEBUG")
 
-	// --debug implies --log
+	// DEBUG implies LOG
 	if flagDebug {
 		flagLog = true
 	}
