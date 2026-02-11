@@ -85,7 +85,6 @@ func main() {
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
 
-	changedE2E := make(map[string]bool)
 	sdkLibsAffected := false
 
 	for levelIdx, level := range levels {
@@ -117,29 +116,10 @@ func main() {
 
 			if !lib {
 				fmt.Printf("  Type: app (not a library) — skipping export analysis\n\n")
-				if strings.HasPrefix(info.ProjectFolder, "apps/") {
-					appName := strings.TrimPrefix(info.ProjectFolder, "apps/")
-					changedE2E["e2e/"+appName+"-e2e"] = true
-				}
-				// Direct changes in e2e packages themselves
-				// TODO: for e2e packages (not sdk-ui-tests-e2e), filter which specific test files/specs
-				// are affected based on changes in the e2e package itself and its corresponding app.
-				// This would allow running only the relevant subset of e2e tests.
-				if strings.HasPrefix(info.ProjectFolder, "e2e/") && directlyChanged {
-					changedE2E[info.ProjectFolder] = true
-				}
-				if info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" && directlyChanged {
-					changedE2E[info.ProjectFolder] = true
-				}
 				continue
 			}
 
 			fmt.Printf("  Type: library\n")
-
-			// Direct changes in e2e library packages (e.g. sdk-ui-tests-e2e)
-			if directlyChanged && info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" {
-				changedE2E[info.ProjectFolder] = true
-			}
 
 			entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
 			if len(entrypoints) == 0 {
@@ -215,13 +195,28 @@ func main() {
 		}
 	}
 
+	// Collect affected e2e packages from the dependency graph
+	changedE2E := make(map[string]bool)
+	for pkgName := range affectedSet {
+		info := projectMap[pkgName]
+		if info == nil {
+			continue
+		}
+		if strings.HasPrefix(info.ProjectFolder, "e2e/") {
+			changedE2E[pkgName] = true
+		}
+		// sdk-ui-tests-e2e lives in sdk/libs/, not e2e/ — detect direct changes
+		if info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" && changedProjects[pkgName] != nil {
+			changedE2E[pkgName] = true
+		}
+	}
 	if sdkLibsAffected {
-		changedE2E["sdk/libs/sdk-ui-tests-e2e"] = true
+		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
 	}
 
 	fmt.Printf("Affected e2e packages (%d):\n", len(changedE2E))
-	for folder := range changedE2E {
-		fmt.Printf("  - %s\n", folder)
+	for name := range changedE2E {
+		fmt.Printf("  - %s\n", name)
 	}
 }
 
