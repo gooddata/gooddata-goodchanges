@@ -554,6 +554,36 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				}
 			}
 
+			// Intra-file propagation: if symbol A is newly tainted and symbol B
+			// references A in its body, B is also tainted. Repeat until stable.
+			if len(newlyTainted) > 0 && importerAnalysis.SourceFile != nil {
+				taintedSet := make(map[string]bool)
+				for _, n := range newlyTainted {
+					taintedSet[n] = true
+				}
+				sourceText := importerAnalysis.SourceFile.Text()
+				lineMap := importerAnalysis.SourceFile.ECMALineMap()
+				changed := true
+				for changed {
+					changed = false
+					for _, sym := range importerAnalysis.Symbols {
+						if taintedSet[sym.Name] {
+							continue
+						}
+						bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
+						for tName := range taintedSet {
+							if strings.Contains(bodyText, tName) {
+								taintedSet[sym.Name] = true
+								newlyTainted = append(newlyTainted, sym.Name)
+								changed = true
+								debugf("    → %s: %s tainted via intra-file dep on %s", importerStem, sym.Name, tName)
+								break
+							}
+						}
+					}
+				}
+			}
+
 			if len(newlyTainted) == 0 {
 				debugf("    → %s: re-export/usage check found nothing new", importerStem)
 				continue
