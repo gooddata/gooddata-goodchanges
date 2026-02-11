@@ -120,10 +120,22 @@ func main() {
 					appName := strings.TrimPrefix(info.ProjectFolder, "apps/")
 					changedE2E["e2e/"+appName+"-e2e"] = true
 				}
+				// Direct changes in e2e packages themselves
+				if strings.HasPrefix(info.ProjectFolder, "e2e/") && directlyChanged {
+					changedE2E[info.ProjectFolder] = true
+				}
+				if info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" && directlyChanged {
+					changedE2E[info.ProjectFolder] = true
+				}
 				continue
 			}
 
 			fmt.Printf("  Type: library\n")
+
+			// Direct changes in e2e library packages (e.g. sdk-ui-tests-e2e)
+			if directlyChanged && info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" {
+				changedE2E[info.ProjectFolder] = true
+			}
 
 			entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
 			if len(entrypoints) == 0 {
