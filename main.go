@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"goodchanges/internal/analyzer"
 	"goodchanges/internal/git"
+	"goodchanges/internal/lockfile"
 	"goodchanges/internal/rush"
 )
 
@@ -38,6 +40,21 @@ func main() {
 	projectMap := rush.BuildProjectMap(rushConfig)
 	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles)
 
+	// Detect lockfile dep changes per subspace
+	depAffectedFolders := findLockfileAffectedProjects(rushConfig, mergeBase)
+
+	// Add dep-affected projects to the changed set (they count as directly changed)
+	for folder := range depAffectedFolders {
+		for _, rp := range rushConfig.Projects {
+			if rp.ProjectFolder == folder {
+				if changedProjects[rp.PackageName] == nil {
+					changedProjects[rp.PackageName] = projectMap[rp.PackageName]
+				}
+				break
+			}
+		}
+	}
+
 	// Get diffs for directly changed projects
 	directDiffs := make(map[string]string)
 	for pkgName, info := range changedProjects {
@@ -61,11 +78,11 @@ func main() {
 
 	fmt.Printf("Merge base: %s\n\n", mergeBase[:12])
 	fmt.Printf("Directly changed projects: %d\n", len(changedProjects))
+	fmt.Printf("Dep-affected projects (lockfile): %d\n", len(depAffectedFolders))
 	fmt.Printf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
 	fmt.Printf("Processing in %d levels (bottom-up):\n\n", len(levels))
 
 	// Track affected exports per package for cross-package propagation.
-	// Maps import specifier (e.g. "@gooddata/sdk-ui-kit") to set of affected export names.
 	allUpstreamTaint := make(map[string]map[string]bool)
 
 	changedE2E := make(map[string]bool)
@@ -84,17 +101,21 @@ func main() {
 			pkg := info.Package
 			lib := analyzer.IsLibrary(pkg)
 			directlyChanged := changedProjects[pkgName] != nil
+			isDepAffected := depAffectedFolders[info.ProjectFolder]
 
 			fmt.Printf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
-			if directlyChanged {
+			if directlyChanged && isDepAffected {
+				fmt.Printf("  [directly changed + dep change in lockfile]\n")
+			} else if directlyChanged {
 				fmt.Printf("  [directly changed]\n")
+			} else if isDepAffected {
+				fmt.Printf("  [dep change in lockfile]\n")
 			} else {
 				fmt.Printf("  [affected via dependencies]\n")
 			}
 
 			if !lib {
 				fmt.Printf("  Type: app (not a library) — skipping export analysis\n\n")
-				// Map apps/{name} → e2e/{name}-e2e
 				if strings.HasPrefix(info.ProjectFolder, "apps/") {
 					appName := strings.TrimPrefix(info.ProjectFolder, "apps/")
 					changedE2E["e2e/"+appName+"-e2e"] = true
@@ -114,6 +135,41 @@ func main() {
 				fmt.Printf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
 			}
 
+			// If this project has a dep change in the lockfile, all exports are tainted.
+			// TODO: instead of tainting all exports, find which direct deps changed (including
+			// transitive changes via the lockfile dep graph), find all imports of those deps
+			// in this package's source, taint all usages of those imports, then trace up to
+			// the package's exports — same as intra-package taint propagation.
+			if isDepAffected {
+				fmt.Printf("  [all exports tainted due to lockfile dep change]\n")
+				for _, ep := range entrypoints {
+					specifier := pkgName
+					if ep.ExportPath != "." {
+						specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
+					}
+					// Collect all export names from this entrypoint
+					epExports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
+					if len(epExports) > 0 {
+						if allUpstreamTaint[specifier] == nil {
+							allUpstreamTaint[specifier] = make(map[string]bool)
+						}
+						for _, name := range epExports {
+							allUpstreamTaint[specifier][name] = true
+						}
+						fmt.Printf("    Entrypoint %q: all %d exports tainted\n", ep.ExportPath, len(epExports))
+					}
+				}
+				fmt.Println()
+				if strings.HasPrefix(info.ProjectFolder, "sdk/libs/") {
+					sdkLibsAffected = true
+				}
+				// Still run normal analysis to catch code changes too
+				// but skip if no direct code diff
+				if directDiffs[pkgName] == "" {
+					continue
+				}
+			}
+
 			// Build upstream taint for this package from its dependencies
 			pkgUpstreamTaint := make(map[string]map[string]bool)
 			for _, dep := range info.DependsOn {
@@ -129,7 +185,7 @@ func main() {
 				}
 			}
 
-			diffText := directDiffs[pkgName] // empty string if not directly changed
+			diffText := directDiffs[pkgName]
 
 			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, diffText, flagIncludeTypes, pkgUpstreamTaint)
 			if err != nil {
@@ -152,9 +208,6 @@ func main() {
 					fmt.Printf("      - %s\n", name)
 				}
 
-				// Register affected exports for downstream packages to consume.
-				// Map entrypoint to import specifier:
-				//   "." → pkgName, "./internal" → pkgName + "/internal"
 				specifier := pkgName
 				if ae.EntrypointPath != "." {
 					specifier = pkgName + strings.TrimPrefix(ae.EntrypointPath, ".")
@@ -178,4 +231,33 @@ func main() {
 	for folder := range changedE2E {
 		fmt.Printf("  - %s\n", folder)
 	}
+}
+
+// findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
+func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[string]bool {
+	// Collect subspaces: "default" for projects without subspaceName, plus named ones
+	subspaces := make(map[string]bool)
+	subspaces["default"] = true
+	for _, p := range config.Projects {
+		if p.SubspaceName != "" {
+			subspaces[p.SubspaceName] = true
+		}
+	}
+
+	result := make(map[string]bool)
+	for subspace := range subspaces {
+		lockfilePath := filepath.Join("common", "config", "subspaces", subspace, "pnpm-lock.yaml")
+		if _, err := os.Stat(lockfilePath); err != nil {
+			continue
+		}
+		diffText, err := git.DiffSincePath(mergeBase, lockfilePath)
+		if err != nil || diffText == "" {
+			continue
+		}
+		affected := lockfile.FindDepAffectedProjects(lockfilePath, subspace, diffText)
+		for folder := range affected {
+			result[folder] = true
+		}
+	}
+	return result
 }

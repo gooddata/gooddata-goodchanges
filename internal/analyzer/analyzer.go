@@ -70,6 +70,28 @@ func FindEntrypoints(projectFolder string, pkg rush.PackageJSON) []Entrypoint {
 	return entrypoints
 }
 
+// CollectEntrypointExports parses an entrypoint file and returns all export names.
+func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
+	fullPath := filepath.Join(projectFolder, ep.SourceFile)
+	analysis, err := tsparse.ParseFile(fullPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	seen := make(map[string]bool)
+	for _, exp := range analysis.Exports {
+		name := exp.Name
+		if name == "*" {
+			continue
+		}
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 type importEdge struct {
 	fromStem   string
 	localNames []string
