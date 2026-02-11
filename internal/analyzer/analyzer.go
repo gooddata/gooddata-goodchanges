@@ -92,6 +92,50 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 	return names
 }
 
+// HasTaintedImports checks if any source file in the given folder imports
+// tainted symbols from the upstreamTaint map. Used for app-like packages
+// (e.g. e2e scenario apps) where we don't need to trace to entrypoint exports,
+// just detect whether any tainted dependency is actually imported.
+func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool) bool {
+	if len(upstreamTaint) == 0 {
+		return false
+	}
+	allFiles, err := globSourceFiles(folder)
+	if err != nil {
+		return false
+	}
+	for _, relPath := range allFiles {
+		fullPath := filepath.Join(folder, relPath)
+		analysis, err := tsparse.ParseFile(fullPath)
+		if err != nil {
+			continue
+		}
+		for _, imp := range analysis.Imports {
+			if strings.HasPrefix(imp.Source, ".") {
+				continue
+			}
+			affectedNames, ok := upstreamTaint[imp.Source]
+			if !ok || len(affectedNames) == 0 {
+				continue
+			}
+			if len(imp.Names) == 0 {
+				// Unassigned import from tainted package
+				return true
+			}
+			for _, name := range imp.Names {
+				if strings.HasPrefix(name, "*:") {
+					// Namespace import — any taint means affected
+					return true
+				}
+				if affectedNames[name] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 type importEdge struct {
 	fromStem     string
 	localNames   []string

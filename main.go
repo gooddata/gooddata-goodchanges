@@ -85,8 +85,6 @@ func main() {
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
 
-	sdkLibsAffected := false
-
 	for levelIdx, level := range levels {
 		// TODO: packages within the same level that don't depend on each other
 		// can be processed in parallel using goroutines.
@@ -137,9 +135,6 @@ func main() {
 					depNames = append(depNames, d)
 				}
 				fmt.Printf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
-				if strings.HasPrefix(info.ProjectFolder, "sdk/libs/") {
-					sdkLibsAffected = true
-				}
 			}
 
 			// Build upstream taint for this package from its dependencies
@@ -171,9 +166,6 @@ func main() {
 			}
 
 			fmt.Printf("  Affected exports:\n")
-			if strings.HasPrefix(info.ProjectFolder, "sdk/libs/") {
-				sdkLibsAffected = true
-			}
 			for _, ae := range affected {
 				fmt.Printf("    Entrypoint %q:\n", ae.EntrypointPath)
 				for _, name := range ae.ExportNames {
@@ -210,7 +202,8 @@ func main() {
 			changedE2E[pkgName] = true
 		}
 	}
-	if sdkLibsAffected {
+	// Check if sdk-ui-tests-e2e's scenarios app imports any tainted exports
+	if analyzer.HasTaintedImports("sdk/libs/sdk-ui-tests-e2e", allUpstreamTaint) {
 		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
 	}
 
