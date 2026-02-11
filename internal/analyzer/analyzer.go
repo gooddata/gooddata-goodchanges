@@ -763,7 +763,8 @@ func globSourceFiles(projectFolder string) ([]string, error) {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == "node_modules" || base == ".git" || base == "dist" || base == "esm" || base == "lib" || base == "build" {
+			// TODO: use tsconfig.json outDir to determine build output directories instead of hardcoding
+			if base == "node_modules" || base == ".git" || base == "dist" || base == "esm" {
 				return filepath.SkipDir
 			}
 			return nil
