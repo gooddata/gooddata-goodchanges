@@ -1,4 +1,4 @@
-package analyzer
+package analyzer_old
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"goodchanges/internal/git"
+	"goodchanges/internal/diff"
 	"goodchanges/internal/rush"
 	"goodchanges/internal/tsparse"
 )
@@ -157,19 +157,11 @@ type importEdge struct {
 
 // AnalyzeLibraryPackage builds a full internal file dependency graph,
 // then propagates taint from changed files and upstream dependencies through unlimited hops.
-// Instead of line-range heuristics, this version diffs OLD and NEW ASTs per symbol.
-// mergeBase is the git commit to compare against. changedFiles is the full list of changed
-// file paths (repo-relative) — only files within projectFolder are considered.
 // upstreamTaint maps import specifiers (e.g. "@gooddata/sdk-ui-kit") to sets of affected export names.
-// taintedExternalDeps is a set of external package names that changed in the lockfile.
-func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, mergeBase string, changedFiles []string, includeTypes bool, upstreamTaint map[string]map[string]bool, taintedExternalDeps map[string]bool) ([]AffectedExport, error) {
-	// Filter changed files to those within this project
-	var projectChangedFiles []string
-	for _, f := range changedFiles {
-		if strings.HasPrefix(f, projectFolder+"/") {
-			projectChangedFiles = append(projectChangedFiles, f)
-		}
-	}
+// taintedExternalDeps is a set of external package names that changed in the lockfile — all imports
+// from these packages are considered tainted (since we don't know which exports changed).
+func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffText string, includeTypes bool, upstreamTaint map[string]map[string]bool, taintedExternalDeps map[string]bool) ([]AffectedExport, error) {
+	fileDiffs := diff.ParseFiles(diffText)
 
 	// Glob and parse ALL source files in the package
 	allFiles, err := globSourceFiles(projectFolder)
@@ -268,42 +260,46 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 		}
 	}
 
-	// Seed taint from diff — AST diffing approach.
-	// For each changed file, fetch the OLD version from git, parse both OLD and NEW ASTs,
-	// compare each symbol's body text to determine which symbols actually changed.
-	// Distinguishes runtime changes from type-only changes (e.g. adding `as Type`).
+	// Seed taint from diff
+	// TODO: Replace line-range heuristic with proper AST diffing.
+	//   Current approach: parse the NEW file, overlay hunk line ranges onto symbol spans.
+	//   Better approach: parse OLD and NEW ASTs, structurally diff each symbol to detect
+	//   actual changes. This would catch:
+	//     - New props added to components (structural change, not just line overlap)
+	//     - Changed function signatures
+	//     - Body-level implementation changes
+	//   Important: must distinguish genuine implementation changes from type-only casts, e.g.
+	//     `const x = example` → `const x = example as Example`
+	//   which is a type annotation change, NOT a runtime change. AST diff should compare
+	//   the expression trees with type annotations stripped to detect this.
 	tainted := make(map[string]map[string]bool)
 
-	debugf("=== Seeding taint from AST diff for %s ===", projectFolder)
-	debugf("  Changed files in project: %d", len(projectChangedFiles))
-	for _, changedFile := range projectChangedFiles {
-		relToProject := strings.TrimPrefix(changedFile, projectFolder+"/")
+	debugf("=== Seeding taint from diff for %s ===", projectFolder)
+	debugf("  Diff files: %d", len(fileDiffs))
+	for _, fd := range fileDiffs {
+		debugf("  Diff file: %s (hunks: %d)", fd.Path, len(fd.ChangedLines))
+		for _, lr := range fd.ChangedLines {
+			debugf("    hunk lines %d-%d", lr.Start, lr.End)
+		}
+		relToProject := strings.TrimPrefix(fd.Path, projectFolder+"/")
 		ext := strings.ToLower(filepath.Ext(relToProject))
 		if ext != ".ts" && ext != ".tsx" && ext != ".js" && ext != ".jsx" {
-			debugf("  skipping non-TS file: %s", relToProject)
+			debugf("    skipping non-TS file: %s", relToProject)
 			continue
 		}
 		stem := stripTSExtension(relToProject)
-		newAnalysis := fileAnalyses[stem]
-		if newAnalysis == nil {
-			debugf("  WARNING: no analysis found for stem %q", stem)
+		analysis := fileAnalyses[stem]
+		if analysis == nil {
+			debugf("    WARNING: no analysis found for stem %q", stem)
 			continue
 		}
-
-		// Get old file content from git
-		oldContent, err := git.ShowFile(mergeBase, changedFile)
-		if err != nil {
-			oldContent = ""
+		debugf("    Symbols in %s:", stem)
+		for _, sym := range analysis.Symbols {
+			debugf("      %s (%s) lines %d-%d exported=%v typeOnly=%v",
+				sym.Name, sym.Kind, sym.StartLine, sym.EndLine, sym.IsExported, sym.IsTypeOnly)
 		}
-
-		var oldAnalysis *tsparse.FileAnalysis
-		if oldContent != "" {
-			oldAnalysis, _ = tsparse.ParseContent(oldContent, changedFile)
-		}
-
-		affected := findAffectedSymbolsByASTDiff(oldAnalysis, newAnalysis, oldContent, includeTypes)
-		debugf("  %s: affected symbols (AST diff): %v", stem, affected)
-
+		affected := tsparse.FindAffectedSymbols(analysis, fd.ChangedLines, includeTypes)
+		debugf("    Affected symbols: %v", affected)
 		if len(affected) > 0 {
 			if tainted[stem] == nil {
 				tainted[stem] = make(map[string]bool)

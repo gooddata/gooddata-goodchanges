@@ -59,17 +59,6 @@ func main() {
 		}
 	}
 
-	// Get diffs for directly changed projects
-	directDiffs := make(map[string]string)
-	for pkgName, info := range changedProjects {
-		d, err := git.DiffSincePath(mergeBase, info.ProjectFolder)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not get diff for %s: %v\n", pkgName, err)
-			continue
-		}
-		directDiffs[pkgName] = d
-	}
-
 	// Find the full affected subgraph: directly changed + all transitive dependents
 	var seeds []string
 	for pkgName := range changedProjects {
@@ -156,9 +145,7 @@ func main() {
 				}
 			}
 
-			diffText := directDiffs[pkgName]
-
-			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, diffText, flagIncludeTypes, pkgUpstreamTaint, changedDeps)
+			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, mergeBase, changedFiles, flagIncludeTypes, pkgUpstreamTaint, changedDeps)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  Error analyzing package: %v\n", err)
 				continue

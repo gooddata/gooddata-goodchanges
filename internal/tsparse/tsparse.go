@@ -48,20 +48,25 @@ func ParseFile(filePath string) (*FileAnalysis, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseContent(string(content), filePath)
+}
 
-	scriptKind := inferScriptKind(filePath)
-	absPath := filePath
-	if !filepath.IsAbs(filePath) {
-		absPath, _ = filepath.Abs(filePath)
+// ParseContent parses TypeScript/JavaScript source code from a string.
+// The filename is used to infer the script kind (TS, TSX, JS, JSX).
+func ParseContent(content string, filename string) (*FileAnalysis, error) {
+	scriptKind := inferScriptKind(filename)
+	absPath := filename
+	if !filepath.IsAbs(filename) {
+		absPath, _ = filepath.Abs(filename)
 	}
 
 	sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
 		FileName:         absPath,
 		JSDocParsingMode: ast.JSDocParsingModeParseNone,
-	}, string(content), scriptKind)
+	}, content, scriptKind)
 
 	analysis := &FileAnalysis{
-		Path:       filePath,
+		Path:       filename,
 		SourceFile: sf,
 	}
 

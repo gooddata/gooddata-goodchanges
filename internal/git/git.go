@@ -67,6 +67,18 @@ func DiffSincePath(commit string, path string) (string, error) {
 	return Cmd("diff", commit, "--", path)
 }
 
+// ShowFile returns the content of a file at a specific commit.
+// Returns empty string and no error if the file didn't exist at that commit.
+func ShowFile(commit string, path string) (string, error) {
+	cmd := exec.Command("git", "show", commit+":"+path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// File might not exist at this commit — that's fine
+		return "", nil
+	}
+	return string(out), nil
+}
+
 // ChangedFilesSince returns the list of changed file paths since the given commit.
 func ChangedFilesSince(commit string) ([]string, error) {
 	raw, err := Cmd("diff", "--name-only", commit)
