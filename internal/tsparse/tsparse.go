@@ -78,6 +78,9 @@ func ParseContent(content string, filename string) (*FileAnalysis, error) {
 		extractDeclarations(stmt, sf, lineMap, analysis)
 	}
 
+	// Walk entire AST for dynamic imports: import("specifier")
+	extractDynamicImports(sf, analysis)
+
 	return analysis, nil
 }
 
@@ -431,6 +434,96 @@ func getDeclName(node *ast.Node) string {
 	}
 	if ast.IsIdentifier(name) {
 		return name.Text()
+	}
+	return ""
+}
+
+// extractDynamicImports walks the full AST to find dynamic import() calls
+// and adds them to the imports list.
+//
+// Pattern 2 (destructured): const { Foo, Bar } = await import("pkg")
+//   → Import{Names: ["Foo", "Bar"], Source: "pkg"}
+//
+// Fallback (no destructuring): any import("pkg") call
+//   → Import{Names: nil, Source: "pkg"} (treated as namespace/side-effect import)
+func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
+	// Track already-seen specifiers from static imports to avoid duplicates
+	staticSources := make(map[string]bool)
+	for _, imp := range analysis.Imports {
+		staticSources[imp.Source] = true
+	}
+
+	var walk func(n *ast.Node)
+	walk = func(n *ast.Node) {
+		if n == nil {
+			return
+		}
+
+		// Look for VariableDeclaration with destructuring + dynamic import initializer
+		if n.Kind == ast.KindVariableDeclaration {
+			vd := n.AsVariableDeclaration()
+			name := vd.Name()
+			if name != nil && ast.IsObjectBindingPattern(name) && vd.Initializer != nil {
+				specifier := extractDynamicImportSpecifier(vd.Initializer)
+				if specifier != "" && !staticSources[specifier] {
+					bp := name.AsBindingPattern()
+					if bp.Elements != nil {
+						var names []string
+						for _, elem := range bp.Elements.Nodes {
+							be := elem.AsBindingElement()
+							elemName := be.Name()
+							if elemName != nil && ast.IsIdentifier(elemName) {
+								names = append(names, elemName.Text())
+							}
+						}
+						if len(names) > 0 {
+							analysis.Imports = append(analysis.Imports, Import{
+								Names:  names,
+								Source: specifier,
+							})
+							staticSources[specifier] = true
+						}
+					}
+				}
+			}
+		}
+
+		n.ForEachChild(func(child *ast.Node) bool {
+			walk(child)
+			return false
+		})
+	}
+
+	for _, stmt := range sf.Statements.Nodes {
+		walk(stmt)
+	}
+}
+
+// extractDynamicImportSpecifier checks if an expression is (or contains)
+// a dynamic import() call and returns the module specifier string.
+// Handles: import("pkg"), await import("pkg")
+func extractDynamicImportSpecifier(expr *ast.Node) string {
+	if expr == nil {
+		return ""
+	}
+	// Unwrap await
+	if expr.Kind == ast.KindAwaitExpression {
+		expr = expr.AsAwaitExpression().Expression
+	}
+	if expr == nil {
+		return ""
+	}
+	// Check for import() call
+	if expr.Kind == ast.KindCallExpression {
+		ce := expr.AsCallExpression()
+		if ce.Expression != nil && ce.Expression.Kind == ast.KindImportKeyword {
+			if ce.Arguments != nil && len(ce.Arguments.Nodes) > 0 {
+				arg := ce.Arguments.Nodes[0]
+				if arg.Kind == ast.KindStringLiteral {
+					return strings.Trim(arg.Text(), "\"'`")
+				}
+			}
+		}
 	}
 	return ""
 }
