@@ -128,7 +128,11 @@ func LoadProjectConfig(projectFolder string) *ProjectConfig {
 }
 
 // IsIgnored checks if a file path (relative to project root) matches any ignore glob.
+// The config file itself (.goodchangesrc.json) is always ignored.
 func (pc *ProjectConfig) IsIgnored(relPath string) bool {
+	if relPath == ".goodchangesrc.json" {
+		return true
+	}
 	if pc == nil {
 		return false
 	}
