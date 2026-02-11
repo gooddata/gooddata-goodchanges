@@ -72,8 +72,8 @@ func ParseContent(content string, filename string) (*FileAnalysis, error) {
 
 	for _, stmt := range sf.Statements.Nodes {
 		extractImports(stmt, analysis)
-		extractExports(stmt, sf, lineMap, analysis)
-		extractDeclarations(stmt, sf, lineMap, analysis)
+		extractExports(stmt, analysis)
+		extractDeclarations(stmt, lineMap, analysis)
 	}
 
 	// Walk entire AST for dynamic imports: import("specifier")
@@ -157,7 +157,7 @@ func extractImports(stmt *ast.Node, analysis *FileAnalysis) {
 	})
 }
 
-func extractExports(stmt *ast.Node, sf *ast.SourceFile, lineMap []core.TextPos, analysis *FileAnalysis) {
+func extractExports(stmt *ast.Node, analysis *FileAnalysis) {
 	switch {
 	case ast.IsExportDeclaration(stmt):
 		ed := stmt.AsExportDeclaration()
@@ -226,7 +226,7 @@ func extractExports(stmt *ast.Node, sf *ast.SourceFile, lineMap []core.TextPos, 
 	}
 }
 
-func extractDeclarations(stmt *ast.Node, sf *ast.SourceFile, lineMap []core.TextPos, analysis *FileAnalysis) {
+func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileAnalysis) {
 	isExported := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsExport)
 	isDefault := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsDefault)
 
