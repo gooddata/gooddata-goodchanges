@@ -105,7 +105,41 @@ func BuildProjectMap(config *Config) map[string]*ProjectInfo {
 	return projectMap
 }
 
+type IgnoreConfig struct {
+	Ignores []string `json:"ignores"`
+}
+
+// LoadIgnoreConfig reads .goodchangesrc.json from the project folder.
+// Returns nil if the file doesn't exist.
+func LoadIgnoreConfig(projectFolder string) *IgnoreConfig {
+	data, err := os.ReadFile(filepath.Join(projectFolder, ".goodchangesrc.json"))
+	if err != nil {
+		return nil
+	}
+	var cfg IgnoreConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	return &cfg
+}
+
+// IsIgnored checks if a file path (relative to project root) matches any ignore glob.
+// Globs are matched against just the relative path from the project root,
+// so "README.md" matches only at the root, not in subdirectories.
+func (ic *IgnoreConfig) IsIgnored(relPath string) bool {
+	if ic == nil {
+		return false
+	}
+	for _, pattern := range ic.Ignores {
+		if matched, _ := filepath.Match(pattern, relPath); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // FindChangedProjects determines which projects have files in the changed file list.
+// Files matching ignore globs in .goodchangesrc.json are excluded.
 func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, changedFiles []string) map[string]*ProjectInfo {
 	result := make(map[string]*ProjectInfo)
 	for _, file := range changedFiles {
@@ -114,6 +148,11 @@ func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, cha
 		}
 		for _, rp := range config.Projects {
 			if strings.HasPrefix(file, rp.ProjectFolder+"/") {
+				relPath := strings.TrimPrefix(file, rp.ProjectFolder+"/")
+				ignoreCfg := LoadIgnoreConfig(rp.ProjectFolder)
+				if ignoreCfg.IsIgnored(relPath) {
+					break
+				}
 				if _, exists := result[rp.PackageName]; !exists {
 					result[rp.PackageName] = projectMap[rp.PackageName]
 				}
