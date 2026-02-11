@@ -207,6 +207,38 @@ func main() {
 		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
 	}
 
+	// Neobackstop detection: triggered if any files in specific sdk-ui-tests dirs
+	// are modified, or if any of those dirs import tainted exports.
+	neobackstopDirs := []string{
+		"sdk/libs/sdk-ui-tests/src",
+		"sdk/libs/sdk-ui-tests/scenarios",
+		"sdk/libs/sdk-ui-tests/stories",
+		"sdk/libs/sdk-ui-tests/neobackstop",
+	}
+	showNeobackstop := false
+	for _, f := range changedFiles {
+		for _, dir := range neobackstopDirs {
+			if strings.HasPrefix(f, dir+"/") {
+				showNeobackstop = true
+				break
+			}
+		}
+		if showNeobackstop {
+			break
+		}
+	}
+	if !showNeobackstop {
+		for _, dir := range neobackstopDirs {
+			if analyzer.HasTaintedImports(dir, allUpstreamTaint) {
+				showNeobackstop = true
+				break
+			}
+		}
+	}
+	if showNeobackstop {
+		changedE2E["neobackstop"] = true
+	}
+
 	fmt.Printf("Affected e2e packages (%d):\n", len(changedE2E))
 	for name := range changedE2E {
 		fmt.Printf("  - %s\n", name)
