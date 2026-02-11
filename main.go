@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"goodchanges/internal/analyzer"
@@ -15,13 +17,27 @@ import (
 
 var flagIncludeTypes bool
 var flagIncludeCSS bool
+var flagLog bool
 var flagDebug bool
+
+// logf prints to stdout only when --log or --debug is set.
+func logf(format string, args ...interface{}) {
+	if flagLog {
+		fmt.Printf(format, args...)
+	}
+}
 
 func main() {
 	flag.BoolVar(&flagIncludeTypes, "include-types", false, "Include type/interface-only changes in analysis")
 	flag.BoolVar(&flagIncludeCSS, "include-css", false, "Track CSS/SCSS changes and propagate taint through style imports")
-	flag.BoolVar(&flagDebug, "debug", false, "Print detailed debug logs to stderr")
+	flag.BoolVar(&flagLog, "log", false, "Print per-level, per-package analysis output")
+	flag.BoolVar(&flagDebug, "debug", false, "Print detailed debug logs to stderr (implies --log)")
 	flag.Parse()
+
+	// --debug implies --log
+	if flagDebug {
+		flagLog = true
+	}
 
 	analyzer.Debug = flagDebug
 	analyzer.IncludeCSS = flagIncludeCSS
@@ -72,11 +88,11 @@ func main() {
 	// Topologically sort: level 0 = lowest-level (no deps on other affected packages)
 	levels := rush.TopologicalSort(projectMap, affectedSet)
 
-	fmt.Printf("Merge base: %s\n\n", mergeBase)
-	fmt.Printf("Directly changed projects: %d\n", len(changedProjects))
-	fmt.Printf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
-	fmt.Printf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
-	fmt.Printf("Processing in %d levels (bottom-up):\n\n", len(levels))
+	logf("Merge base: %s\n\n", mergeBase)
+	logf("Directly changed projects: %d\n", len(changedProjects))
+	logf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
+	logf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
+	logf("Processing in %d levels (bottom-up):\n\n", len(levels))
 
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
@@ -84,7 +100,7 @@ func main() {
 	for levelIdx, level := range levels {
 		// TODO: packages within the same level that don't depend on each other
 		// can be processed in parallel using goroutines.
-		fmt.Printf("--- Level %d (%d packages) ---\n\n", levelIdx, len(level))
+		logf("--- Level %d (%d packages) ---\n\n", levelIdx, len(level))
 
 		for _, pkgName := range level {
 			info := projectMap[pkgName]
@@ -97,32 +113,32 @@ func main() {
 			changedDeps := depChangedDeps[info.ProjectFolder]
 			isDepAffected := len(changedDeps) > 0
 
-			fmt.Printf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
+			logf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
 			if directlyChanged && isDepAffected {
-				fmt.Printf("  [directly changed + dep change in lockfile]\n")
+				logf("  [directly changed + dep change in lockfile]\n")
 			} else if directlyChanged {
-				fmt.Printf("  [directly changed]\n")
+				logf("  [directly changed]\n")
 			} else if isDepAffected {
-				fmt.Printf("  [dep change in lockfile]\n")
+				logf("  [dep change in lockfile]\n")
 			} else {
-				fmt.Printf("  [affected via dependencies]\n")
+				logf("  [affected via dependencies]\n")
 			}
 
 			if !lib {
-				fmt.Printf("  Type: app (not a library) — skipping export analysis\n\n")
+				logf("  Type: app (not a library) — skipping export analysis\n\n")
 				continue
 			}
 
-			fmt.Printf("  Type: library\n")
+			logf("  Type: library\n")
 
 			entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
 			if len(entrypoints) == 0 {
-				fmt.Printf("  No entrypoints found — skipping\n\n")
+				logf("  No entrypoints found — skipping\n\n")
 				continue
 			}
-			fmt.Printf("  Entrypoints:\n")
+			logf("  Entrypoints:\n")
 			for _, ep := range entrypoints {
-				fmt.Printf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
+				logf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
 			}
 
 			if isDepAffected {
@@ -130,7 +146,7 @@ func main() {
 				for d := range changedDeps {
 					depNames = append(depNames, d)
 				}
-				fmt.Printf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
+				logf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 			}
 
 			// Build upstream taint for this package from its dependencies
@@ -155,15 +171,15 @@ func main() {
 			}
 
 			if len(affected) == 0 {
-				fmt.Printf("  No affected exports found\n\n")
+				logf("  No affected exports found\n\n")
 				continue
 			}
 
-			fmt.Printf("  Affected exports:\n")
+			logf("  Affected exports:\n")
 			for _, ae := range affected {
-				fmt.Printf("    Entrypoint %q:\n", ae.EntrypointPath)
+				logf("    Entrypoint %q:\n", ae.EntrypointPath)
 				for _, name := range ae.ExportNames {
-					fmt.Printf("      - %s\n", name)
+					logf("      - %s\n", name)
 				}
 
 				specifier := pkgName
@@ -177,7 +193,7 @@ func main() {
 					allUpstreamTaint[specifier][name] = true
 				}
 			}
-			fmt.Println()
+			logf("\n")
 		}
 	}
 
@@ -314,10 +330,23 @@ func main() {
 		changedE2E["neobackstop"] = true
 	}
 
-	fmt.Printf("Affected e2e packages (%d):\n", len(changedE2E))
+	// Build sorted list of affected e2e packages
+	e2eList := make([]string, 0, len(changedE2E))
 	for name := range changedE2E {
-		fmt.Printf("  - %s\n", name)
+		e2eList = append(e2eList, name)
 	}
+	sort.Strings(e2eList)
+
+	if flagLog {
+		logf("Affected e2e packages (%d):\n", len(e2eList))
+		for _, name := range e2eList {
+			logf("  - %s\n", name)
+		}
+	}
+
+	// Always output JSON to stdout
+	jsonBytes, _ := json.Marshal(e2eList)
+	fmt.Println(string(jsonBytes))
 }
 
 // findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
