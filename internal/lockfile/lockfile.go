@@ -7,61 +7,80 @@ import (
 	"strings"
 )
 
+type depLineInfo struct {
+	projectFolder string
+	depName       string
+}
+
 // FindDepAffectedProjects parses a pnpm-lock.yaml and its diff to find
 // which projects had direct dependency version changes.
-// Returns a set of project folders (resolved from importer paths).
+// Returns a map of project folder → set of changed dependency package names.
+// Workspace deps (version: link:...) are excluded as they're handled by the Rush dep graph.
 // The subspace parameter is used to resolve importer paths (they're relative to common/temp/{subspace}/).
 // TODO: handle transitive dep changes (a dep-of-a-dep changing without the direct dep version changing).
-// TODO: instead of tainting all exports of a dep-affected library, find imports of the changed dep,
-// taint all usages of those imports, then trace up to the library's exports.
-func FindDepAffectedProjects(lockfilePath string, subspace string, diffText string) map[string]bool {
+func FindDepAffectedProjects(lockfilePath string, subspace string, diffText string) map[string]map[string]bool {
 	if diffText == "" {
 		return nil
 	}
 
-	// Read the current lockfile to build a line→importer map
 	content, err := os.ReadFile(lockfilePath)
 	if err != nil {
 		return nil
 	}
 
-	// Importer paths in pnpm-lock.yaml are relative to common/temp/{subspace}/
 	importerBase := filepath.Join("common", "temp", subspace)
-	importerAtLine := buildImporterLineMap(string(content), importerBase)
+	lineMap, workspaceDeps := buildImporterDepLineMap(string(content), importerBase)
 
-	// Parse diff hunks to find changed line numbers (new-file side)
 	changedLines := parseDiffChangedLines(diffText)
 
-	// Map changed lines to importers
-	result := make(map[string]bool)
+	result := make(map[string]map[string]bool)
 	for _, line := range changedLines {
-		if importer, ok := importerAtLine[line]; ok && importer != "" {
-			result[importer] = true
+		info, ok := lineMap[line]
+		if !ok || info.projectFolder == "" || info.depName == "" {
+			continue
 		}
+		if workspaceDeps[info.projectFolder] != nil && workspaceDeps[info.projectFolder][info.depName] {
+			continue
+		}
+		if result[info.projectFolder] == nil {
+			result[info.projectFolder] = make(map[string]bool)
+		}
+		result[info.projectFolder][info.depName] = true
 	}
 	return result
 }
 
-// buildImporterLineMap reads a pnpm-lock.yaml and returns a map of
-// line number (1-based) → resolved project folder for lines in the importers section.
-func buildImporterLineMap(content string, importerBase string) map[int]string {
-	result := make(map[int]string)
+// buildImporterDepLineMap reads a pnpm-lock.yaml and returns:
+// - lineMap: line number (1-based) → project folder + dep name for lines in the importers section
+// - workspaceDeps: project folder → dep name → true (for workspace deps identified by version: link:...)
+func buildImporterDepLineMap(content string, importerBase string) (map[int]depLineInfo, map[string]map[string]bool) {
+	lineMap := make(map[int]depLineInfo)
+	workspaceDeps := make(map[string]map[string]bool)
 	lines := strings.Split(content, "\n")
 
 	inImporters := false
 	currentImporter := ""
+	inDepSection := false
+	currentDepName := ""
 
 	for i, line := range lines {
 		lineNum := i + 1
+		indent := countLeadingSpaces(line)
+		trimmed := strings.TrimSpace(line)
 
-		// Top-level section detection (no indent)
-		if len(line) > 0 && line[0] != ' ' && line[0] != '#' {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// Top-level section (no indent)
+		if indent == 0 {
 			if strings.HasPrefix(line, "importers:") {
 				inImporters = true
-				continue
-			} else if inImporters {
-				inImporters = false
 				currentImporter = ""
+				inDepSection = false
+				currentDepName = ""
+			} else if inImporters {
+				break // Left importers section
 			}
 			continue
 		}
@@ -70,31 +89,88 @@ func buildImporterLineMap(content string, importerBase string) map[int]string {
 			continue
 		}
 
-		// Importer path: exactly 2 spaces indent, ends with ':'
-		// e.g. "  ../../../sdk/libs/sdk-ui-kit:"
-		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasSuffix(strings.TrimSpace(line), ":") {
-			rawPath := strings.TrimSpace(line)
-			rawPath = strings.TrimSuffix(rawPath, ":")
-			if rawPath == "." {
-				currentImporter = ""
+		switch {
+		case indent == 2:
+			// Importer path (e.g. "  ../../../sdk/libs/sdk-ui-kit:")
+			if !strings.HasSuffix(trimmed, ":") {
 				continue
 			}
-			// Resolve relative to the pnpm install base (common/temp/{subspace}/)
-			resolved := filepath.Clean(filepath.Join(importerBase, rawPath))
-			if rel, err := filepath.Rel(".", resolved); err == nil {
-				currentImporter = rel
+			rawPath := strings.TrimSuffix(trimmed, ":")
+			rawPath = strings.Trim(rawPath, "'\"")
+			if rawPath == "." {
+				currentImporter = ""
 			} else {
-				currentImporter = resolved
+				resolved := filepath.Clean(filepath.Join(importerBase, rawPath))
+				if rel, err := filepath.Rel(".", resolved); err == nil {
+					currentImporter = rel
+				} else {
+					currentImporter = resolved
+				}
 			}
-			continue
-		}
+			inDepSection = false
+			currentDepName = ""
 
-		// Lines deeper than importer path belong to current importer
-		if currentImporter != "" && len(line) > 2 && line[0] == ' ' {
-			result[lineNum] = currentImporter
+		case indent == 4:
+			// Section header (dependencies, devDependencies, optionalDependencies)
+			if currentImporter == "" {
+				continue
+			}
+			if trimmed == "dependencies:" || trimmed == "devDependencies:" || trimmed == "optionalDependencies:" {
+				inDepSection = true
+			} else {
+				inDepSection = false
+			}
+			currentDepName = ""
+
+		case indent == 6:
+			// Dep name (e.g. "      react:" or "      '@gooddata/sdk-model':")
+			if !inDepSection || currentImporter == "" {
+				continue
+			}
+			if !strings.HasSuffix(trimmed, ":") {
+				continue
+			}
+			currentDepName = strings.TrimSuffix(trimmed, ":")
+			currentDepName = strings.Trim(currentDepName, "'\"")
+			// Map the dep name line too (in case it's added/removed in the diff)
+			lineMap[lineNum] = depLineInfo{
+				projectFolder: currentImporter,
+				depName:       currentDepName,
+			}
+
+		case indent >= 8:
+			// Dep property (specifier, version)
+			if !inDepSection || currentImporter == "" || currentDepName == "" {
+				continue
+			}
+			lineMap[lineNum] = depLineInfo{
+				projectFolder: currentImporter,
+				depName:       currentDepName,
+			}
+			// Detect workspace deps by version: link:...
+			if strings.HasPrefix(trimmed, "version:") {
+				version := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
+				version = strings.Trim(version, "'\"")
+				if strings.HasPrefix(version, "link:") {
+					if workspaceDeps[currentImporter] == nil {
+						workspaceDeps[currentImporter] = make(map[string]bool)
+					}
+					workspaceDeps[currentImporter][currentDepName] = true
+				}
+			}
 		}
 	}
-	return result
+
+	return lineMap, workspaceDeps
+}
+
+func countLeadingSpaces(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' {
+			return i
+		}
+	}
+	return len(s)
 }
 
 // parseDiffChangedLines extracts the new-file line numbers of changed lines from a unified diff.

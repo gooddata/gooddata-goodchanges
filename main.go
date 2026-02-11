@@ -40,11 +40,11 @@ func main() {
 	projectMap := rush.BuildProjectMap(rushConfig)
 	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles)
 
-	// Detect lockfile dep changes per subspace
-	depAffectedFolders := findLockfileAffectedProjects(rushConfig, mergeBase)
+	// Detect lockfile dep changes per subspace (folder → set of changed dep names)
+	depChangedDeps := findLockfileAffectedProjects(rushConfig, mergeBase)
 
 	// Add dep-affected projects to the changed set (they count as directly changed)
-	for folder := range depAffectedFolders {
+	for folder := range depChangedDeps {
 		for _, rp := range rushConfig.Projects {
 			if rp.ProjectFolder == folder {
 				if changedProjects[rp.PackageName] == nil {
@@ -78,7 +78,7 @@ func main() {
 
 	fmt.Printf("Merge base: %s\n\n", mergeBase[:12])
 	fmt.Printf("Directly changed projects: %d\n", len(changedProjects))
-	fmt.Printf("Dep-affected projects (lockfile): %d\n", len(depAffectedFolders))
+	fmt.Printf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
 	fmt.Printf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
 	fmt.Printf("Processing in %d levels (bottom-up):\n\n", len(levels))
 
@@ -101,7 +101,8 @@ func main() {
 			pkg := info.Package
 			lib := analyzer.IsLibrary(pkg)
 			directlyChanged := changedProjects[pkgName] != nil
-			isDepAffected := depAffectedFolders[info.ProjectFolder]
+			changedDeps := depChangedDeps[info.ProjectFolder]
+			isDepAffected := len(changedDeps) > 0
 
 			fmt.Printf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
 			if directlyChanged && isDepAffected {
@@ -150,38 +151,14 @@ func main() {
 				fmt.Printf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
 			}
 
-			// If this project has a dep change in the lockfile, all exports are tainted.
-			// TODO: instead of tainting all exports, find which direct deps changed (including
-			// transitive changes via the lockfile dep graph), find all imports of those deps
-			// in this package's source, taint all usages of those imports, then trace up to
-			// the package's exports — same as intra-package taint propagation.
 			if isDepAffected {
-				fmt.Printf("  [all exports tainted due to lockfile dep change]\n")
-				for _, ep := range entrypoints {
-					specifier := pkgName
-					if ep.ExportPath != "." {
-						specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
-					}
-					// Collect all export names from this entrypoint
-					epExports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
-					if len(epExports) > 0 {
-						if allUpstreamTaint[specifier] == nil {
-							allUpstreamTaint[specifier] = make(map[string]bool)
-						}
-						for _, name := range epExports {
-							allUpstreamTaint[specifier][name] = true
-						}
-						fmt.Printf("    Entrypoint %q: all %d exports tainted\n", ep.ExportPath, len(epExports))
-					}
+				depNames := make([]string, 0, len(changedDeps))
+				for d := range changedDeps {
+					depNames = append(depNames, d)
 				}
-				fmt.Println()
+				fmt.Printf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 				if strings.HasPrefix(info.ProjectFolder, "sdk/libs/") {
 					sdkLibsAffected = true
-				}
-				// Still run normal analysis to catch code changes too
-				// but skip if no direct code diff
-				if directDiffs[pkgName] == "" {
-					continue
 				}
 			}
 
@@ -202,7 +179,7 @@ func main() {
 
 			diffText := directDiffs[pkgName]
 
-			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, diffText, flagIncludeTypes, pkgUpstreamTaint)
+			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, diffText, flagIncludeTypes, pkgUpstreamTaint, changedDeps)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  Error analyzing package: %v\n", err)
 				continue
@@ -249,7 +226,8 @@ func main() {
 }
 
 // findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
-func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[string]bool {
+// Returns a map of project folder → set of changed external dep package names.
+func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[string]map[string]bool {
 	// Collect subspaces: "default" for projects without subspaceName, plus named ones
 	subspaces := make(map[string]bool)
 	subspaces["default"] = true
@@ -259,7 +237,7 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[str
 		}
 	}
 
-	result := make(map[string]bool)
+	result := make(map[string]map[string]bool)
 	for subspace := range subspaces {
 		lockfilePath := filepath.Join("common", "config", "subspaces", subspace, "pnpm-lock.yaml")
 		if _, err := os.Stat(lockfilePath); err != nil {
@@ -270,8 +248,13 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[str
 			continue
 		}
 		affected := lockfile.FindDepAffectedProjects(lockfilePath, subspace, diffText)
-		for folder := range affected {
-			result[folder] = true
+		for folder, deps := range affected {
+			if result[folder] == nil {
+				result[folder] = make(map[string]bool)
+			}
+			for dep := range deps {
+				result[folder][dep] = true
+			}
 		}
 	}
 	return result

@@ -102,7 +102,9 @@ type importEdge struct {
 // AnalyzeLibraryPackage builds a full internal file dependency graph,
 // then propagates taint from changed files and upstream dependencies through unlimited hops.
 // upstreamTaint maps import specifiers (e.g. "@gooddata/sdk-ui-kit") to sets of affected export names.
-func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffText string, includeTypes bool, upstreamTaint map[string]map[string]bool) ([]AffectedExport, error) {
+// taintedExternalDeps is a set of external package names that changed in the lockfile — all imports
+// from these packages are considered tainted (since we don't know which exports changed).
+func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffText string, includeTypes bool, upstreamTaint map[string]map[string]bool, taintedExternalDeps map[string]bool) ([]AffectedExport, error) {
 	fileDiffs := diff.ParseFiles(diffText)
 
 	// Glob and parse ALL source files in the package
@@ -198,6 +200,16 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				if !ok || len(affectedNames) == 0 {
 					continue
 				}
+				if len(imp.Names) == 0 {
+					// Unassigned import from tainted upstream dep: taint all symbols
+					if tainted[stem] == nil {
+						tainted[stem] = make(map[string]bool)
+					}
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+					continue
+				}
 				var taintedLocalNames []string
 				for _, name := range imp.Names {
 					if strings.HasPrefix(name, "*:") {
@@ -233,6 +245,71 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
+				}
+			}
+		}
+	}
+
+	// Seed taint from tainted external dependencies (lockfile dep changes).
+	// All imports from these deps are considered tainted since we can't know which
+	// specific exports of the external package changed.
+	if len(taintedExternalDeps) > 0 {
+		for stem, analysis := range fileAnalyses {
+			// Check imports from tainted external deps
+			for _, imp := range analysis.Imports {
+				if strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if !isFromTaintedDep(imp.Source, taintedExternalDeps) {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if len(imp.Names) == 0 {
+					// Unassigned import from tainted external dep: taint all symbols
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+				} else {
+					// All imported names are tainted — find symbols that use them
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
+					// Check if any imported names are directly re-exported
+					for _, exp := range analysis.Exports {
+						if exp.Source == "" {
+							for _, name := range imp.Names {
+								cleanName := name
+								if strings.HasPrefix(cleanName, "*:") {
+									cleanName = strings.TrimPrefix(cleanName, "*:")
+								}
+								if exp.LocalName == cleanName {
+									tainted[stem][exp.Name] = true
+								}
+							}
+						}
+					}
+				}
+			}
+			// Check re-exports from tainted external deps
+			for _, exp := range analysis.Exports {
+				if exp.Source == "" || strings.HasPrefix(exp.Source, ".") {
+					continue
+				}
+				if !isFromTaintedDep(exp.Source, taintedExternalDeps) {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if exp.IsStar {
+					// export * from tainted dep: can't enumerate external exports,
+					// use "*" marker so all consumers of this file are tainted
+					tainted[stem]["*"] = true
+				} else {
+					tainted[stem][exp.Name] = true
 				}
 			}
 		}
@@ -283,7 +360,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 						if len(currentTainted) > 0 {
 							taintedLocalNames = append(taintedLocalNames, edge.localNames[i])
 						}
-					} else if currentTainted[origName] {
+					} else if currentTainted[origName] || currentTainted["*"] {
 						taintedLocalNames = append(taintedLocalNames, edge.localNames[i])
 					}
 				}
@@ -328,7 +405,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 							for name := range currentTainted {
 								newlyTainted = append(newlyTainted, name)
 							}
-						} else if currentTainted[exp.LocalName] {
+						} else if currentTainted[exp.LocalName] || currentTainted["*"] {
 							newlyTainted = append(newlyTainted, exp.Name)
 						}
 					}
@@ -374,8 +451,21 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 			}
 
 			if exp.Source == "" {
-				if tainted[epStem][exp.LocalName] {
+				if tainted[epStem][exp.LocalName] || tainted[epStem]["*"] {
 					affectedNames = append(affectedNames, exp.Name)
+				}
+				continue
+			}
+
+			// Re-exports from tainted external deps (non-relative, non-internal)
+			if !strings.HasPrefix(exp.Source, ".") {
+				if len(taintedExternalDeps) > 0 && isFromTaintedDep(exp.Source, taintedExternalDeps) {
+					if exp.IsStar {
+						// TODO: can't enumerate external dep exports for star re-exports at entrypoint level.
+						// For now these are handled via the "*" marker in the seeding phase.
+					} else {
+						affectedNames = append(affectedNames, exp.Name)
+					}
 				}
 				continue
 			}
@@ -393,7 +483,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				for name := range srcTainted {
 					affectedNames = append(affectedNames, name)
 				}
-			} else if srcTainted[exp.LocalName] {
+			} else if srcTainted[exp.LocalName] || srcTainted["*"] {
 				affectedNames = append(affectedNames, exp.Name)
 			}
 		}
@@ -402,6 +492,9 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 			seen := make(map[string]bool)
 			var deduped []string
 			for _, n := range affectedNames {
+				if n == "*" {
+					continue // internal marker, not a real export name
+				}
 				if !seen[n] {
 					seen[n] = true
 					deduped = append(deduped, n)
@@ -445,6 +538,18 @@ func findTaintedSymbolsByUsage(analysis *tsparse.FileAnalysis, taintedNames []st
 		}
 	}
 	return result
+}
+
+// isFromTaintedDep checks if an import source matches any tainted external dep name.
+// Handles both exact matches (e.g. "react") and subpath imports (e.g. "react/jsx-runtime"),
+// as well as scoped packages (e.g. "@emotion/react", "@emotion/react/utils").
+func isFromTaintedDep(importSource string, taintedDeps map[string]bool) bool {
+	for depName := range taintedDeps {
+		if importSource == depName || strings.HasPrefix(importSource, depName+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func globSourceFiles(projectFolder string) ([]string, error) {
