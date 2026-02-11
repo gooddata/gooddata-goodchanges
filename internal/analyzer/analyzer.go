@@ -123,9 +123,14 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 	}
 
 	// Build import graph (relative imports only)
-	// TODO: handle CSS/SCSS/LESS imports (e.g. import "./styles.css") as side-effect imports.
-	// If a CSS file is changed in the diff, all files that import it should have all their
-	// exports tainted, since CSS side effects affect the entire file.
+	// TODO: handle SCSS/CSS/LESS change detection and taint propagation, in three steps:
+	//   Step 1 (basic): if any SCSS/CSS file changes in a package, taint ALL CSS/SCSS files
+	//     in that package. Any TS/CSS import of a tainted CSS file becomes tainted (unassigned
+	//     import → taint all exports in the importing file).
+	//   Step 2 (CSS modules): handle CSS module files properly — the import is unassigned
+	//     (import "./styles.css"), so taint the importing TS file and all its exports.
+	//   Step 3 (granular, if possible): if an SCSS file changes and it maps to a specific CSS
+	//     output file, only that CSS file becomes tainted (instead of all CSS files in the package).
 	importGraph := make(map[string][]importEdge)
 
 	for stem, analysis := range fileAnalyses {
