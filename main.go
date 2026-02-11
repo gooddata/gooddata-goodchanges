@@ -262,6 +262,9 @@ func main() {
 	if changedProjects["@gooddata/sdk-ui-tests-e2e"] != nil {
 		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
 	}
+	if len(depChangedDeps["sdk/libs/sdk-ui-tests-e2e"]) > 0 {
+		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
+	}
 	// Check if sdk-ui-tests-e2e's scenarios app imports any tainted exports
 	if analyzer.HasTaintedImports("sdk/libs/sdk-ui-tests-e2e", allUpstreamTaint, nil) {
 		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
