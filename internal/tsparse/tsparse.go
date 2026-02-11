@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"goodchanges/internal/diff"
-
 	"goodchanges/tsgo-vendor/pkg/ast"
 	"goodchanges/tsgo-vendor/pkg/core"
 	"goodchanges/tsgo-vendor/pkg/parser"
@@ -82,101 +80,6 @@ func ParseContent(content string, filename string) (*FileAnalysis, error) {
 	extractDynamicImports(sf, analysis)
 
 	return analysis, nil
-}
-
-// FindAffectedSymbols returns the names of symbols affected by the given changed line ranges.
-// Type-only changes do not propagate to runtime symbols unless includeTypes is true.
-func FindAffectedSymbols(analysis *FileAnalysis, changedLines []diff.LineRange, includeTypes bool) []string {
-	if analysis.SourceFile == nil {
-		return nil
-	}
-
-	symByName := make(map[string]*SymbolDecl)
-	for i := range analysis.Symbols {
-		symByName[analysis.Symbols[i].Name] = &analysis.Symbols[i]
-	}
-
-	// Step 1: find directly changed symbols
-	directlyChanged := make(map[string]bool)
-	directlyChangedTypeOnly := make(map[string]bool)
-	for _, sym := range analysis.Symbols {
-		for _, lr := range changedLines {
-			if sym.StartLine <= lr.End && sym.EndLine >= lr.Start {
-				directlyChanged[sym.Name] = true
-				directlyChangedTypeOnly[sym.Name] = sym.IsTypeOnly
-				break
-			}
-		}
-	}
-
-	if len(directlyChanged) == 0 {
-		var all []string
-		for _, sym := range analysis.Symbols {
-			if sym.IsExported && (!sym.IsTypeOnly || includeTypes) {
-				all = append(all, sym.Name)
-			}
-		}
-		for _, exp := range analysis.Exports {
-			if exp.Source == "" && (!exp.IsTypeOnly || includeTypes) {
-				all = append(all, exp.LocalName)
-			}
-		}
-		return all
-	}
-
-	// Step 2: build intra-file reference graph
-	sourceText := analysis.SourceFile.Text()
-	dependsOn := make(map[string]map[string]bool)
-	for _, sym := range analysis.Symbols {
-		bodyText := ExtractTextForLines(sourceText, analysis.SourceFile.ECMALineMap(), sym.StartLine, sym.EndLine)
-		deps := make(map[string]bool)
-		for _, other := range analysis.Symbols {
-			if other.Name != sym.Name && strings.Contains(bodyText, other.Name) {
-				deps[other.Name] = true
-			}
-		}
-		dependsOn[sym.Name] = deps
-	}
-
-	// Step 3: propagate — type-only changes don't propagate to runtime symbols
-	affected := make(map[string]bool)
-	affectedTypeOnly := make(map[string]bool)
-
-	for name := range directlyChanged {
-		affected[name] = true
-		affectedTypeOnly[name] = directlyChangedTypeOnly[name]
-	}
-
-	changed := true
-	for changed {
-		changed = false
-		for _, sym := range analysis.Symbols {
-			if affected[sym.Name] {
-				continue
-			}
-			for dep := range dependsOn[sym.Name] {
-				if !affected[dep] {
-					continue
-				}
-				if affectedTypeOnly[dep] && !sym.IsTypeOnly {
-					continue
-				}
-				affected[sym.Name] = true
-				affectedTypeOnly[sym.Name] = sym.IsTypeOnly
-				changed = true
-				break
-			}
-		}
-	}
-
-	var result []string
-	for name := range affected {
-		if affectedTypeOnly[name] && !includeTypes {
-			continue
-		}
-		result = append(result, name)
-	}
-	return result
 }
 
 // ExtractTextForLines returns the text between the given 1-based line numbers.
@@ -442,14 +345,17 @@ func getDeclName(node *ast.Node) string {
 // and adds them to the imports list.
 //
 // Pattern 1 (variable + property access): const mod = await import("pkg"); mod.Foo
-//   → Import{Names: ["Foo"], Source: "pkg"}
+//
+//	→ Import{Names: ["Foo"], Source: "pkg"}
 //
 // Pattern 2 (destructured): const { Foo, Bar } = await import("pkg")
-//   → Import{Names: ["Foo", "Bar"], Source: "pkg"}
+//
+//	→ Import{Names: ["Foo", "Bar"], Source: "pkg"}
 //
 // Pattern 3 (.then callback): import("pkg").then((m) => m.Foo) or
-//   import("pkg").then((m) => ({ default: m.Foo }))
-//   → Import{Names: ["Foo"], Source: "pkg"}
+//
+//	import("pkg").then((m) => ({ default: m.Foo }))
+//	→ Import{Names: ["Foo"], Source: "pkg"}
 func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 	// Pattern 3: import("pkg").then((m) => m.Foo)
 	// Walk the full AST looking for .then() calls on import() expressions

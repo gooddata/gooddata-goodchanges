@@ -58,11 +58,6 @@ func MergeBase(branch string) (string, error) {
 	return base, nil
 }
 
-// DiffSince returns the unified diff of all changes since the given commit.
-func DiffSince(commit string) (string, error) {
-	return Cmd("diff", commit)
-}
-
 // DiffSincePath returns the unified diff for a specific path since the given commit.
 func DiffSincePath(commit string, path string) (string, error) {
 	return Cmd("diff", commit, "--", path)
