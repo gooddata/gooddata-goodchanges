@@ -121,6 +121,9 @@ func main() {
 					changedE2E["e2e/"+appName+"-e2e"] = true
 				}
 				// Direct changes in e2e packages themselves
+				// TODO: for e2e packages (not sdk-ui-tests-e2e), filter which specific test files/specs
+				// are affected based on changes in the e2e package itself and its corresponding app.
+				// This would allow running only the relevant subset of e2e tests.
 				if strings.HasPrefix(info.ProjectFolder, "e2e/") && directlyChanged {
 					changedE2E[info.ProjectFolder] = true
 				}
