@@ -11,6 +11,15 @@ import (
 	"goodchanges/internal/tsparse"
 )
 
+// Debug enables verbose logging to stderr when set to true (via --debug flag).
+var Debug bool
+
+func debugf(format string, args ...interface{}) {
+	if Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	}
+}
+
 type Entrypoint struct {
 	ExportPath string // e.g. ".", "./utils/*"
 	SourceFile string // resolved source file path relative to project root
@@ -209,23 +218,88 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				isSideEffect: len(imp.Names) == 0,
 			})
 		}
+
+		// Also treat re-exports (export { X } from "./foo" / export * from "./foo")
+		// as import edges — barrel files have no import statements but still depend
+		// on the files they re-export from.
+		for _, exp := range analysis.Exports {
+			if exp.Source == "" || !strings.HasPrefix(exp.Source, ".") {
+				continue
+			}
+			resolvedStem := resolveImportSource(fileDir, exp.Source, projectFolder)
+			if resolvedStem == "" {
+				continue
+			}
+			// Check if we already have an import edge to this source
+			// (to avoid duplicating edges when a file both imports and re-exports)
+			alreadyHasEdge := false
+			for _, edge := range importGraph[stem] {
+				if edge.fromStem == resolvedStem {
+					alreadyHasEdge = true
+					break
+				}
+			}
+			if alreadyHasEdge {
+				continue
+			}
+			// Create a synthetic import edge for the re-export
+			var localNames, origNames []string
+			if exp.IsStar {
+				// export * from "./foo" — treat as namespace-like (any taint propagates)
+				localNames = append(localNames, "*:__reexport__")
+				origNames = append(origNames, "*")
+			} else {
+				localNames = append(localNames, exp.LocalName)
+				origNames = append(origNames, exp.LocalName)
+			}
+			importGraph[stem] = append(importGraph[stem], importEdge{
+				fromStem:   resolvedStem,
+				localNames: localNames,
+				origNames:  origNames,
+			})
+		}
 	}
 
 	// Seed taint from diff
+	// TODO: Replace line-range heuristic with proper AST diffing.
+	//   Current approach: parse the NEW file, overlay hunk line ranges onto symbol spans.
+	//   Better approach: parse OLD and NEW ASTs, structurally diff each symbol to detect
+	//   actual changes. This would catch:
+	//     - New props added to components (structural change, not just line overlap)
+	//     - Changed function signatures
+	//     - Body-level implementation changes
+	//   Important: must distinguish genuine implementation changes from type-only casts, e.g.
+	//     `const x = example` → `const x = example as Example`
+	//   which is a type annotation change, NOT a runtime change. AST diff should compare
+	//   the expression trees with type annotations stripped to detect this.
 	tainted := make(map[string]map[string]bool)
 
+	debugf("=== Seeding taint from diff for %s ===", projectFolder)
+	debugf("  Diff files: %d", len(fileDiffs))
 	for _, fd := range fileDiffs {
+		debugf("  Diff file: %s (hunks: %d)", fd.Path, len(fd.ChangedLines))
+		for _, lr := range fd.ChangedLines {
+			debugf("    hunk lines %d-%d", lr.Start, lr.End)
+		}
 		relToProject := strings.TrimPrefix(fd.Path, projectFolder+"/")
 		ext := strings.ToLower(filepath.Ext(relToProject))
 		if ext != ".ts" && ext != ".tsx" && ext != ".js" && ext != ".jsx" {
+			debugf("    skipping non-TS file: %s", relToProject)
 			continue
 		}
 		stem := stripTSExtension(relToProject)
 		analysis := fileAnalyses[stem]
 		if analysis == nil {
+			debugf("    WARNING: no analysis found for stem %q", stem)
 			continue
 		}
+		debugf("    Symbols in %s:", stem)
+		for _, sym := range analysis.Symbols {
+			debugf("      %s (%s) lines %d-%d exported=%v typeOnly=%v",
+				sym.Name, sym.Kind, sym.StartLine, sym.EndLine, sym.IsExported, sym.IsTypeOnly)
+		}
 		affected := tsparse.FindAffectedSymbols(analysis, fd.ChangedLines, includeTypes)
+		debugf("    Affected symbols: %v", affected)
 		if len(affected) > 0 {
 			if tainted[stem] == nil {
 				tainted[stem] = make(map[string]bool)
@@ -362,7 +436,17 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 		}
 	}
 
+	debugf("=== Initial taint map (after diff seed) ===")
+	for stem, names := range tainted {
+		nameList := make([]string, 0, len(names))
+		for n := range names {
+			nameList = append(nameList, n)
+		}
+		debugf("  %s: %v", stem, nameList)
+	}
+
 	if len(tainted) == 0 {
+		debugf("  (empty — no taint seeded from diff)")
 		return nil, nil
 	}
 
@@ -375,6 +459,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 	}
 
 	// Propagate taint — BFS, unlimited hops
+	debugf("=== Starting BFS taint propagation ===")
 	queue := make([]string, 0, len(tainted))
 	for stem := range tainted {
 		queue = append(queue, stem)
@@ -384,6 +469,9 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 		currentStem := queue[0]
 		queue = queue[1:]
 		currentTainted := tainted[currentStem]
+
+		debugf("  BFS visiting: %s (tainted: %v)", currentStem, mapKeys(currentTainted))
+		debugf("    reverse importers: %v", reverseImports[currentStem])
 
 		for _, importerStem := range reverseImports[currentStem] {
 			importerAnalysis := fileAnalyses[importerStem]
@@ -414,8 +502,11 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 			}
 
 			if !hasSideEffectImport && len(taintedLocalNames) == 0 {
+				debugf("    → %s: no tainted imports from %s (skipping)", importerStem, currentStem)
 				continue
 			}
+
+			debugf("    → %s: sideEffect=%v taintedLocalNames=%v", importerStem, hasSideEffectImport, taintedLocalNames)
 
 			var newlyTainted []string
 
@@ -460,8 +551,11 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 			}
 
 			if len(newlyTainted) == 0 {
+				debugf("    → %s: re-export/usage check found nothing new", importerStem)
 				continue
 			}
+
+			debugf("    → %s: newly tainted symbols: %v", importerStem, newlyTainted)
 
 			if tainted[importerStem] == nil {
 				tainted[importerStem] = make(map[string]bool)
@@ -480,6 +574,15 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 	}
 
 	// Check entrypoints for tainted exports
+	debugf("=== Final taint map (after BFS) ===")
+	for stem, names := range tainted {
+		nameList := make([]string, 0, len(names))
+		for n := range names {
+			nameList = append(nameList, n)
+		}
+		debugf("  %s: %v", stem, nameList)
+	}
+
 	var result []AffectedExport
 
 	for _, ep := range entrypoints {
@@ -487,6 +590,12 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 		epAnalysis := fileAnalyses[epStem]
 		if epAnalysis == nil {
 			continue
+		}
+
+		debugf("=== Checking entrypoint %q (stem=%s) ===", ep.ExportPath, epStem)
+		debugf("  Exports in entrypoint:")
+		for _, exp := range epAnalysis.Exports {
+			debugf("    name=%q local=%q source=%q typeOnly=%v star=%v", exp.Name, exp.LocalName, exp.Source, exp.IsTypeOnly, exp.IsStar)
 		}
 
 		var affectedNames []string
@@ -519,12 +628,17 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 
 			resolvedStem := resolveImportSource(epDir, exp.Source, projectFolder)
 			if resolvedStem == "" {
+				debugf("    export %q from %q: could not resolve stem", exp.Name, exp.Source)
 				continue
 			}
 			srcTainted := tainted[resolvedStem]
 			if srcTainted == nil {
+				debugf("    export %q from %q → stem %q: not tainted", exp.Name, exp.Source, resolvedStem)
 				continue
 			}
+
+			debugf("    export %q from %q → stem %q: tainted=%v star=%v localName=%q",
+				exp.Name, exp.Source, resolvedStem, mapKeys(srcTainted), exp.IsStar, exp.LocalName)
 
 			if exp.IsStar {
 				for name := range srcTainted {
@@ -597,6 +711,14 @@ func isFromTaintedDep(importSource string, taintedDeps map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+func mapKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func globSourceFiles(projectFolder string) ([]string, error) {

@@ -14,10 +14,14 @@ import (
 )
 
 var flagIncludeTypes bool
+var flagDebug bool
 
 func main() {
 	flag.BoolVar(&flagIncludeTypes, "include-types", false, "Include type/interface-only changes in analysis")
+	flag.BoolVar(&flagDebug, "debug", false, "Print detailed debug logs to stderr")
 	flag.Parse()
+
+	analyzer.Debug = flagDebug
 
 	mergeBase, err := git.MergeBase("master")
 	if err != nil {
