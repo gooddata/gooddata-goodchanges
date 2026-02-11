@@ -446,7 +446,15 @@ func getDeclName(node *ast.Node) string {
 //
 // Pattern 2 (destructured): const { Foo, Bar } = await import("pkg")
 //   → Import{Names: ["Foo", "Bar"], Source: "pkg"}
+//
+// Pattern 3 (.then callback): import("pkg").then((m) => m.Foo) or
+//   import("pkg").then((m) => ({ default: m.Foo }))
+//   → Import{Names: ["Foo"], Source: "pkg"}
 func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
+	// Pattern 3: import("pkg").then((m) => m.Foo)
+	// Walk the full AST looking for .then() calls on import() expressions
+	extractThenDynamicImports(sf, analysis)
+
 	// Phase 1: collect dynamic imports assigned to variables or destructured
 	// varName → specifier (for pattern 1)
 	varImports := make(map[string]string)
@@ -580,4 +588,147 @@ func extractDynamicImportSpecifier(expr *ast.Node) string {
 		}
 	}
 	return ""
+}
+
+// extractThenDynamicImports handles pattern 3: import("pkg").then((m) => m.Foo)
+// Finds .then() calls on import() expressions, extracts the callback parameter name,
+// and collects property accesses on that parameter as import names.
+func extractThenDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
+	staticSources := make(map[string]bool)
+	for _, imp := range analysis.Imports {
+		staticSources[imp.Source] = true
+	}
+
+	var walk func(n *ast.Node)
+	walk = func(n *ast.Node) {
+		if n == nil {
+			return
+		}
+
+		// Look for: someExpr.then(callback) where someExpr is import("pkg")
+		if n.Kind == ast.KindCallExpression {
+			ce := n.AsCallExpression()
+			if ce.Expression != nil && ce.Expression.Kind == ast.KindPropertyAccessExpression {
+				pa := ce.Expression.AsPropertyAccessExpression()
+				propName := pa.Name()
+				if propName != nil && propName.Text() == "then" {
+					// Check if the object is an import() call
+					specifier := extractDynamicImportSpecifier(pa.Expression)
+					if specifier != "" && !staticSources[specifier] {
+						// Extract property accesses from the .then callback
+						if ce.Arguments != nil && len(ce.Arguments.Nodes) > 0 {
+							names := extractNamesFromThenCallback(ce.Arguments.Nodes[0])
+							if len(names) > 0 {
+								analysis.Imports = append(analysis.Imports, Import{
+									Names:  names,
+									Source: specifier,
+								})
+								staticSources[specifier] = true
+							}
+						}
+					}
+				}
+			}
+		}
+
+		n.ForEachChild(func(child *ast.Node) bool {
+			walk(child)
+			return false
+		})
+	}
+
+	for _, stmt := range sf.Statements.Nodes {
+		walk(stmt)
+	}
+}
+
+// extractNamesFromThenCallback extracts property names accessed on the callback
+// parameter. Handles arrow functions and function expressions.
+// e.g. (m) => m.Foo → ["Foo"]
+// e.g. (m) => ({ default: m.Foo }) → ["Foo"]
+// e.g. ({ Foo }) => ... → ["Foo"]
+func extractNamesFromThenCallback(callbackNode *ast.Node) []string {
+	if callbackNode == nil {
+		return nil
+	}
+
+	var paramName string
+	var body *ast.Node
+
+	switch callbackNode.Kind {
+	case ast.KindArrowFunction:
+		af := callbackNode.AsArrowFunction()
+		if af.Parameters != nil && len(af.Parameters.Nodes) > 0 {
+			param := af.Parameters.Nodes[0]
+			pName := param.Name()
+			if pName != nil {
+				if ast.IsIdentifier(pName) {
+					paramName = pName.Text()
+				} else if ast.IsObjectBindingPattern(pName) {
+					// Destructured parameter: ({ Foo, Bar }) => ...
+					bp := pName.AsBindingPattern()
+					if bp.Elements != nil {
+						var names []string
+						for _, elem := range bp.Elements.Nodes {
+							be := elem.AsBindingElement()
+							elemName := be.Name()
+							if elemName != nil && ast.IsIdentifier(elemName) {
+								names = append(names, elemName.Text())
+							}
+						}
+						return names
+					}
+					return nil
+				}
+			}
+		}
+		body = af.Body
+	case ast.KindFunctionExpression:
+		fe := callbackNode.AsFunctionExpression()
+		if fe.Parameters != nil && len(fe.Parameters.Nodes) > 0 {
+			param := fe.Parameters.Nodes[0]
+			pName := param.Name()
+			if pName != nil && ast.IsIdentifier(pName) {
+				paramName = pName.Text()
+			}
+		}
+		body = fe.Body
+	default:
+		return nil
+	}
+
+	if paramName == "" || body == nil {
+		return nil
+	}
+
+	// Walk the body for paramName.Property accesses
+	nameSet := make(map[string]bool)
+	var walkBody func(n *ast.Node)
+	walkBody = func(n *ast.Node) {
+		if n == nil {
+			return
+		}
+		if n.Kind == ast.KindPropertyAccessExpression {
+			pa := n.AsPropertyAccessExpression()
+			if pa.Expression != nil && pa.Expression.Kind == ast.KindIdentifier {
+				if pa.Expression.Text() == paramName {
+					prop := pa.Name()
+					if prop != nil {
+						nameSet[prop.Text()] = true
+					}
+				}
+			}
+		}
+		n.ForEachChild(func(child *ast.Node) bool {
+			walkBody(child)
+			return false
+		})
+	}
+	walkBody(body)
+
+	var names []string
+	for n := range nameSet {
+		names = append(names, n)
+	}
+	return names
 }
