@@ -24,7 +24,7 @@ func envBool(key string) bool {
 	return os.Getenv(key) != ""
 }
 
-// logf prints to stdout only when LOG or DEBUG is set.
+// logf prints to stdout only when LOG_LEVEL is set.
 func logf(format string, args ...interface{}) {
 	if flagLog {
 		fmt.Printf(format, args...)
@@ -34,13 +34,10 @@ func logf(format string, args ...interface{}) {
 func main() {
 	flagIncludeTypes = envBool("INCLUDE_TYPES")
 	flagIncludeCSS = envBool("INCLUDE_CSS")
-	flagLog = envBool("LOG")
-	flagDebug = envBool("DEBUG")
 
-	// DEBUG implies LOG
-	if flagDebug {
-		flagLog = true
-	}
+	logLevel := strings.ToUpper(os.Getenv("LOG_LEVEL"))
+	flagLog = logLevel == "BASIC" || logLevel == "DEBUG"
+	flagDebug = logLevel == "DEBUG"
 
 	analyzer.Debug = flagDebug
 	analyzer.IncludeCSS = flagIncludeCSS
