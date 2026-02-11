@@ -76,7 +76,7 @@ func main() {
 	// Topologically sort: level 0 = lowest-level (no deps on other affected packages)
 	levels := rush.TopologicalSort(projectMap, affectedSet)
 
-	fmt.Printf("Merge base: %s\n\n", mergeBase[:12])
+	fmt.Printf("Merge base: %s\n\n", mergeBase)
 	fmt.Printf("Directly changed projects: %d\n", len(changedProjects))
 	fmt.Printf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
 	fmt.Printf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
