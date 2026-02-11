@@ -441,61 +441,115 @@ func getDeclName(node *ast.Node) string {
 // extractDynamicImports walks the full AST to find dynamic import() calls
 // and adds them to the imports list.
 //
+// Pattern 1 (variable + property access): const mod = await import("pkg"); mod.Foo
+//   → Import{Names: ["Foo"], Source: "pkg"}
+//
 // Pattern 2 (destructured): const { Foo, Bar } = await import("pkg")
 //   → Import{Names: ["Foo", "Bar"], Source: "pkg"}
-//
-// Fallback (no destructuring): any import("pkg") call
-//   → Import{Names: nil, Source: "pkg"} (treated as namespace/side-effect import)
 func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
-	// Track already-seen specifiers from static imports to avoid duplicates
-	staticSources := make(map[string]bool)
-	for _, imp := range analysis.Imports {
-		staticSources[imp.Source] = true
-	}
+	// Phase 1: collect dynamic imports assigned to variables or destructured
+	// varName → specifier (for pattern 1)
+	varImports := make(map[string]string)
 
-	var walk func(n *ast.Node)
-	walk = func(n *ast.Node) {
+	var walkPhase1 func(n *ast.Node)
+	walkPhase1 = func(n *ast.Node) {
 		if n == nil {
 			return
 		}
 
-		// Look for VariableDeclaration with destructuring + dynamic import initializer
 		if n.Kind == ast.KindVariableDeclaration {
 			vd := n.AsVariableDeclaration()
 			name := vd.Name()
-			if name != nil && ast.IsObjectBindingPattern(name) && vd.Initializer != nil {
+			if name != nil && vd.Initializer != nil {
 				specifier := extractDynamicImportSpecifier(vd.Initializer)
-				if specifier != "" && !staticSources[specifier] {
-					bp := name.AsBindingPattern()
-					if bp.Elements != nil {
-						var names []string
-						for _, elem := range bp.Elements.Nodes {
-							be := elem.AsBindingElement()
-							elemName := be.Name()
-							if elemName != nil && ast.IsIdentifier(elemName) {
-								names = append(names, elemName.Text())
+				if specifier != "" {
+					if ast.IsObjectBindingPattern(name) {
+						// Pattern 2: destructured
+						bp := name.AsBindingPattern()
+						if bp.Elements != nil {
+							var names []string
+							for _, elem := range bp.Elements.Nodes {
+								be := elem.AsBindingElement()
+								elemName := be.Name()
+								if elemName != nil && ast.IsIdentifier(elemName) {
+									names = append(names, elemName.Text())
+								}
+							}
+							if len(names) > 0 {
+								analysis.Imports = append(analysis.Imports, Import{
+									Names:  names,
+									Source: specifier,
+								})
 							}
 						}
-						if len(names) > 0 {
-							analysis.Imports = append(analysis.Imports, Import{
-								Names:  names,
-								Source: specifier,
-							})
-							staticSources[specifier] = true
-						}
+					} else if ast.IsIdentifier(name) {
+						// Pattern 1: assigned to variable — collect for phase 2
+						varImports[name.Text()] = specifier
 					}
 				}
 			}
 		}
 
 		n.ForEachChild(func(child *ast.Node) bool {
-			walk(child)
+			walkPhase1(child)
 			return false
 		})
 	}
 
 	for _, stmt := range sf.Statements.Nodes {
-		walk(stmt)
+		walkPhase1(stmt)
+	}
+
+	if len(varImports) == 0 {
+		return
+	}
+
+	// Phase 2: find property accesses on the collected variable names (e.g. mod.Foo)
+	// Collect used property names per specifier
+	propNames := make(map[string]map[string]bool) // specifier → set of property names
+
+	var walkPhase2 func(n *ast.Node)
+	walkPhase2 = func(n *ast.Node) {
+		if n == nil {
+			return
+		}
+
+		if n.Kind == ast.KindPropertyAccessExpression {
+			pa := n.AsPropertyAccessExpression()
+			if pa.Expression != nil && pa.Expression.Kind == ast.KindIdentifier {
+				varName := pa.Expression.Text()
+				if specifier, ok := varImports[varName]; ok {
+					propName := pa.Name()
+					if propName != nil {
+						if propNames[specifier] == nil {
+							propNames[specifier] = make(map[string]bool)
+						}
+						propNames[specifier][propName.Text()] = true
+					}
+				}
+			}
+		}
+
+		n.ForEachChild(func(child *ast.Node) bool {
+			walkPhase2(child)
+			return false
+		})
+	}
+
+	for _, stmt := range sf.Statements.Nodes {
+		walkPhase2(stmt)
+	}
+
+	// Add imports for pattern 1 results
+	for specifier, names := range propNames {
+		var nameList []string
+		for n := range names {
+			nameList = append(nameList, n)
+		}
+		analysis.Imports = append(analysis.Imports, Import{
+			Names:  nameList,
+			Source: specifier,
+		})
 	}
 }
 
