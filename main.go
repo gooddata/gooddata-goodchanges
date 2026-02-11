@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"goodchanges/internal/analyzer"
 	"goodchanges/internal/git"
@@ -107,10 +108,16 @@ func main() {
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
 
+	type pkgResult struct {
+		pkgName  string
+		affected []analyzer.AffectedExport
+	}
+
 	for levelIdx, level := range levels {
-		// TODO: packages within the same level that don't depend on each other
-		// can be processed in parallel using goroutines.
 		logf("--- Level %d (%d packages) ---\n\n", levelIdx, len(level))
+
+		var wg sync.WaitGroup
+		resultsCh := make(chan pkgResult, len(level))
 
 		for _, pkgName := range level {
 			info := projectMap[pkgName]
@@ -159,7 +166,8 @@ func main() {
 				logf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 			}
 
-			// Build upstream taint for this package from its dependencies
+			// Build upstream taint for this package from its dependencies.
+			// allUpstreamTaint is only read here — writes happen after the level completes.
 			pkgUpstreamTaint := make(map[string]map[string]bool)
 			for _, dep := range info.DependsOn {
 				for specifier, names := range allUpstreamTaint {
@@ -174,27 +182,35 @@ func main() {
 				}
 			}
 
-			affected, err := analyzer.AnalyzeLibraryPackage(info.ProjectFolder, entrypoints, mergeBase, changedFiles, flagIncludeTypes, pkgUpstreamTaint, changedDeps)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  Error analyzing package: %v\n", err)
-				continue
-			}
+			wg.Add(1)
+			go func(pkgName string, projectFolder string, entrypoints []analyzer.Entrypoint, pkgUpstreamTaint map[string]map[string]bool, changedDeps map[string]bool) {
+				defer wg.Done()
+				affected, err := analyzer.AnalyzeLibraryPackage(projectFolder, entrypoints, mergeBase, changedFiles, flagIncludeTypes, pkgUpstreamTaint, changedDeps)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Error analyzing package %s: %v\n", pkgName, err)
+					return
+				}
+				if len(affected) > 0 {
+					resultsCh <- pkgResult{pkgName: pkgName, affected: affected}
+				}
+			}(pkgName, info.ProjectFolder, entrypoints, pkgUpstreamTaint, changedDeps)
+		}
 
-			if len(affected) == 0 {
-				logf("  No affected exports found\n\n")
-				continue
-			}
+		wg.Wait()
+		close(resultsCh)
 
-			logf("  Affected exports:\n")
-			for _, ae := range affected {
+		// Merge results into allUpstreamTaint after all goroutines in this level are done
+		for res := range resultsCh {
+			logf("  Affected exports for %s:\n", res.pkgName)
+			for _, ae := range res.affected {
 				logf("    Entrypoint %q:\n", ae.EntrypointPath)
 				for _, name := range ae.ExportNames {
 					logf("      - %s\n", name)
 				}
 
-				specifier := pkgName
+				specifier := res.pkgName
 				if ae.EntrypointPath != "." {
-					specifier = pkgName + strings.TrimPrefix(ae.EntrypointPath, ".")
+					specifier = res.pkgName + strings.TrimPrefix(ae.EntrypointPath, ".")
 				}
 				if allUpstreamTaint[specifier] == nil {
 					allUpstreamTaint[specifier] = make(map[string]bool)
