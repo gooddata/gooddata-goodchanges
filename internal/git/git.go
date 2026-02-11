@@ -34,11 +34,15 @@ func MergeBase(branch string) (string, error) {
 	// Find the merge commit that brought HEAD into the branch, then use its
 	// first parent to compute the real divergence point.
 	if base == head {
-		mergeCommit, err := Cmd("log", "--ancestry-path", head+".."+branch,
-			"--merges", "--first-parent", "--reverse", "--pretty=%H", "-1")
-		if err != nil || mergeCommit == "" {
+		// List all merge commits in ancestry order (oldest first with --reverse).
+		// NOTE: -1 cannot be combined with --reverse (git applies -1 before reversing),
+		// so we get all results and take the first line.
+		mergeList, err := Cmd("log", "--ancestry-path", head+".."+branch,
+			"--merges", "--first-parent", "--reverse", "--pretty=%H")
+		if err != nil || mergeList == "" {
 			return base, nil
 		}
+		mergeCommit := strings.SplitN(mergeList, "\n", 2)[0]
 		firstParent, err := Cmd("rev-parse", mergeCommit+"^1")
 		if err != nil {
 			return base, nil
