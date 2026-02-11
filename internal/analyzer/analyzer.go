@@ -14,6 +14,12 @@ import (
 // Debug enables verbose logging to stderr when set to true (via --debug flag).
 var Debug bool
 
+// IncludeCSS enables CSS/SCSS taint tracking when set to true (via --include-css flag).
+var IncludeCSS bool
+
+// CSSTaintPrefix is the prefix used for CSS taint entries in the upstream taint map.
+const CSSTaintPrefix = "__css__:"
+
 func debugf(format string, args ...interface{}) {
 	if Debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
@@ -126,8 +132,15 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, 
 			if strings.HasPrefix(imp.Source, ".") {
 				continue
 			}
+			// Check exact match first (normal TS exports)
 			affectedNames, ok := upstreamTaint[imp.Source]
 			if !ok || len(affectedNames) == 0 {
+				// Check prefix match for CSS taint (e.g. import "@gooddata/pkg/styles/css/main.css"
+				// matches taint key "@gooddata/pkg/styles")
+				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+					debugf("  HasTaintedImports: %s matched CSS taint via %s", folder, imp.Source)
+					return true
+				}
 				continue
 			}
 			if len(imp.Names) == 0 {
@@ -144,6 +157,55 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, 
 				}
 			}
 		}
+	}
+
+	// Also check SCSS files for @use of tainted style packages
+	if IncludeCSS {
+		scssFiles := globStyleFiles(folder)
+		for _, scssFile := range scssFiles {
+			if ignoreCfg.IsIgnored(scssFile) {
+				continue
+			}
+			uses := parseScssUses(filepath.Join(folder, scssFile))
+			for _, useSpec := range uses {
+				if matchesCSSTaint(useSpec, upstreamTaint) {
+					debugf("  HasTaintedImports: %s matched CSS taint via SCSS @use %s", folder, useSpec)
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// matchesCSSTaint checks if an import source matches any CSS taint entry.
+// CSS taint entries use the prefix "__css__:pkgName" as the key.
+// An import matches if it refers to a style file from a CSS-tainted package.
+func matchesCSSTaint(importSource string, upstreamTaint map[string]map[string]bool) bool {
+	if !isStyleImport(importSource) {
+		return false
+	}
+	for key := range upstreamTaint {
+		if !strings.HasPrefix(key, CSSTaintPrefix) {
+			continue
+		}
+		pkgName := strings.TrimPrefix(key, CSSTaintPrefix)
+		if strings.HasPrefix(importSource, pkgName+"/") || importSource == pkgName {
+			return true
+		}
+	}
+	return false
+}
+
+// isStyleImport returns true if the import source looks like a CSS/SCSS import.
+func isStyleImport(source string) bool {
+	lower := strings.ToLower(source)
+	if strings.HasSuffix(lower, ".css") || strings.HasSuffix(lower, ".scss") {
+		return true
+	}
+	if strings.Contains(lower, "/styles/") || strings.Contains(lower, "/styles") {
+		return true
 	}
 	return false
 }
@@ -323,6 +385,17 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				}
 				affectedNames, ok := upstreamTaint[imp.Source]
 				if !ok || len(affectedNames) == 0 {
+					// Check CSS taint prefix match (e.g. import "@gooddata/pkg/styles/css/main.css")
+					if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+						// CSS import from tainted package: taint all symbols in this file
+						if tainted[stem] == nil {
+							tainted[stem] = make(map[string]bool)
+						}
+						for _, sym := range analysis.Symbols {
+							tainted[stem][sym.Name] = true
+						}
+						debugf("    %s: all symbols tainted via CSS import %s", stem, imp.Source)
+					}
 					continue
 				}
 				if len(imp.Names) == 0 {
@@ -753,6 +826,134 @@ func mapKeys(m map[string]bool) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// FindCSSTaintedPackages scans changed files for CSS/SCSS changes and returns
+// a set of package names that have CSS/SCSS changes.
+func FindCSSTaintedPackages(changedFiles []string, rushConfig *rush.Config, projectMap map[string]*rush.ProjectInfo) map[string]bool {
+	result := make(map[string]bool)
+
+	for _, f := range changedFiles {
+		ext := strings.ToLower(filepath.Ext(f))
+		if ext != ".scss" && ext != ".css" {
+			continue
+		}
+		for _, rp := range rushConfig.Projects {
+			if strings.HasPrefix(f, rp.ProjectFolder+"/") {
+				result[rp.PackageName] = true
+				break
+			}
+		}
+	}
+	return result
+}
+
+// PropagateCSSTaint propagates CSS taint through SCSS @use chains across libraries.
+// When library A's styles are tainted and library B's SCSS @use's library A's styles,
+// library B's styles become tainted too.
+func PropagateCSSTaint(rushConfig *rush.Config, projectMap map[string]*rush.ProjectInfo, upstreamTaint map[string]map[string]bool) {
+	// Collect initially CSS-tainted package names
+	cssTaintedPkgs := make(map[string]bool)
+	for key := range upstreamTaint {
+		if strings.HasPrefix(key, CSSTaintPrefix) {
+			cssTaintedPkgs[strings.TrimPrefix(key, CSSTaintPrefix)] = true
+		}
+	}
+	if len(cssTaintedPkgs) == 0 {
+		return
+	}
+
+	// Iterate through all library packages, scan their SCSS files for @use of tainted packages.
+	// Repeat until stable (to handle transitive SCSS chains).
+	changed := true
+	for changed {
+		changed = false
+		for _, rp := range rushConfig.Projects {
+			if cssTaintedPkgs[rp.PackageName] {
+				continue
+			}
+			info := projectMap[rp.PackageName]
+			if info == nil {
+				continue
+			}
+
+			scssFiles := globStyleFiles(rp.ProjectFolder)
+			for _, scssFile := range scssFiles {
+				uses := parseScssUses(filepath.Join(rp.ProjectFolder, scssFile))
+				for _, useSpec := range uses {
+					for taintedPkg := range cssTaintedPkgs {
+						if strings.HasPrefix(useSpec, taintedPkg+"/") || useSpec == taintedPkg {
+							key := CSSTaintPrefix + rp.PackageName
+							if upstreamTaint[key] == nil {
+								upstreamTaint[key] = make(map[string]bool)
+							}
+							upstreamTaint[key]["*"] = true
+							cssTaintedPkgs[rp.PackageName] = true
+							changed = true
+							debugf("CSS taint propagated: %s (via @use of %s in %s)", rp.PackageName, taintedPkg, scssFile)
+							goto nextPackage
+						}
+					}
+				}
+			}
+		nextPackage:
+		}
+	}
+}
+
+// globStyleFiles returns all .scss and .css files relative to projectFolder.
+func globStyleFiles(projectFolder string) []string {
+	var files []string
+	filepath.Walk(projectFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == "node_modules" || base == ".git" || base == "dist" || base == "esm" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".scss" || ext == ".css" {
+			rel, _ := filepath.Rel(projectFolder, path)
+			files = append(files, rel)
+		}
+		return nil
+	})
+	return files
+}
+
+// parseScssUses parses an SCSS file for @use directives that reference external packages.
+// Returns the specifier strings (e.g. "@gooddata/sdk-ui-kit/styles/scss/variables").
+func parseScssUses(filePath string) []string {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	var uses []string
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "@use ") && !strings.HasPrefix(line, "@import ") {
+			continue
+		}
+		// Extract the string between quotes
+		start := strings.IndexAny(line, "\"'")
+		if start < 0 {
+			continue
+		}
+		end := strings.IndexAny(line[start+1:], "\"'")
+		if end < 0 {
+			continue
+		}
+		spec := line[start+1 : start+1+end]
+		// Only care about external package references
+		if strings.HasPrefix(spec, "@") || (!strings.HasPrefix(spec, ".") && !strings.HasPrefix(spec, "sass:")) {
+			uses = append(uses, spec)
+		}
+	}
+	return uses
 }
 
 func globSourceFiles(projectFolder string) ([]string, error) {

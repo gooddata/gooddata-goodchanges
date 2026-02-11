@@ -14,14 +14,17 @@ import (
 )
 
 var flagIncludeTypes bool
+var flagIncludeCSS bool
 var flagDebug bool
 
 func main() {
 	flag.BoolVar(&flagIncludeTypes, "include-types", false, "Include type/interface-only changes in analysis")
+	flag.BoolVar(&flagIncludeCSS, "include-css", false, "Track CSS/SCSS changes and propagate taint through style imports")
 	flag.BoolVar(&flagDebug, "debug", false, "Print detailed debug logs to stderr")
 	flag.Parse()
 
 	analyzer.Debug = flagDebug
+	analyzer.IncludeCSS = flagIncludeCSS
 
 	mergeBase, err := git.MergeBase("master")
 	if err != nil {
@@ -176,6 +179,24 @@ func main() {
 			}
 			fmt.Println()
 		}
+	}
+
+	// CSS/SCSS taint propagation: when --include-css is set, any changed CSS/SCSS
+	// file in a library taints all style imports from that library in downstream packages.
+	if flagIncludeCSS {
+		cssTaintedPkgs := analyzer.FindCSSTaintedPackages(changedFiles, rushConfig, projectMap)
+		for pkgName := range cssTaintedPkgs {
+			key := analyzer.CSSTaintPrefix + pkgName
+			if allUpstreamTaint[key] == nil {
+				allUpstreamTaint[key] = make(map[string]bool)
+			}
+			allUpstreamTaint[key]["*"] = true
+			if flagDebug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] CSS taint: %s\n", pkgName)
+			}
+		}
+		// Propagate CSS taint through SCSS @use chains across libraries
+		analyzer.PropagateCSSTaint(rushConfig, projectMap, allUpstreamTaint)
 	}
 
 	// Collect affected e2e packages with precise 4-condition detection.
