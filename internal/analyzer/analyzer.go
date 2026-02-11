@@ -96,7 +96,7 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 // tainted symbols from the upstreamTaint map. Used for app-like packages
 // (e.g. e2e scenario apps) where we don't need to trace to entrypoint exports,
 // just detect whether any tainted dependency is actually imported.
-func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool) bool {
+func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.IgnoreConfig) bool {
 	if len(upstreamTaint) == 0 {
 		return false
 	}
@@ -105,6 +105,9 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool) 
 		return false
 	}
 	for _, relPath := range allFiles {
+		if ignoreCfg.IsIgnored(relPath) {
+			continue
+		}
 		fullPath := filepath.Join(folder, relPath)
 		analysis, err := tsparse.ParseFile(fullPath)
 		if err != nil {

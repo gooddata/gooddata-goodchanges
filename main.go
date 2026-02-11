@@ -187,23 +187,83 @@ func main() {
 		}
 	}
 
-	// Collect affected e2e packages from the dependency graph
+	// Collect affected e2e packages with precise 4-condition detection.
+	// For each e2e/ project (non-library), check:
+	//   1. Direct file changes (outside .goodchangesrc.json ignores)
+	//   2. External dep changes in lockfile
+	//   3. Tainted workspace imports into the e2e project
+	//   4. Corresponding app is tainted (directly changed, lockfile deps, or tainted imports)
 	changedE2E := make(map[string]bool)
-	for pkgName := range affectedSet {
-		info := projectMap[pkgName]
+	for _, rp := range rushConfig.Projects {
+		if !strings.HasPrefix(rp.ProjectFolder, "e2e/") {
+			continue
+		}
+		info := projectMap[rp.PackageName]
 		if info == nil {
 			continue
 		}
-		if strings.HasPrefix(info.ProjectFolder, "e2e/") && !analyzer.IsLibrary(info.Package) {
-			changedE2E[pkgName] = true
+		if analyzer.IsLibrary(info.Package) {
+			continue // e.g. e2e-utils is a library, not an e2e test package
 		}
-		// sdk-ui-tests-e2e lives in sdk/libs/, not e2e/ — detect direct changes
-		if info.ProjectFolder == "sdk/libs/sdk-ui-tests-e2e" && changedProjects[pkgName] != nil {
-			changedE2E[pkgName] = true
+
+		ignoreCfg := rush.LoadIgnoreConfig(rp.ProjectFolder)
+
+		// Condition 1: Direct file changes (outside ignores)
+		for _, f := range changedFiles {
+			if strings.HasPrefix(f, rp.ProjectFolder+"/") {
+				relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
+				if !ignoreCfg.IsIgnored(relPath) {
+					changedE2E[rp.PackageName] = true
+					break
+				}
+			}
+		}
+		if changedE2E[rp.PackageName] {
+			continue
+		}
+
+		// Condition 2: External dep changes in lockfile
+		if len(depChangedDeps[rp.ProjectFolder]) > 0 {
+			changedE2E[rp.PackageName] = true
+			continue
+		}
+
+		// Condition 3: Tainted workspace imports (filtered by ignores)
+		if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, ignoreCfg) {
+			changedE2E[rp.PackageName] = true
+			continue
+		}
+
+		// Condition 4: Corresponding app is tainted
+		for _, dep := range info.DependsOn {
+			depInfo := projectMap[dep]
+			if depInfo == nil {
+				continue
+			}
+			if analyzer.IsLibrary(depInfo.Package) {
+				continue // only check app dependencies
+			}
+			// App is tainted if: directly changed, lockfile dep changes, or tainted workspace imports
+			if changedProjects[dep] != nil {
+				changedE2E[rp.PackageName] = true
+				break
+			}
+			if len(depChangedDeps[depInfo.ProjectFolder]) > 0 {
+				changedE2E[rp.PackageName] = true
+				break
+			}
+			if analyzer.HasTaintedImports(depInfo.ProjectFolder, allUpstreamTaint, nil) {
+				changedE2E[rp.PackageName] = true
+				break
+			}
 		}
 	}
+	// sdk-ui-tests-e2e lives in sdk/libs/, not e2e/ — separate detection
+	if changedProjects["@gooddata/sdk-ui-tests-e2e"] != nil {
+		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
+	}
 	// Check if sdk-ui-tests-e2e's scenarios app imports any tainted exports
-	if analyzer.HasTaintedImports("sdk/libs/sdk-ui-tests-e2e", allUpstreamTaint) {
+	if analyzer.HasTaintedImports("sdk/libs/sdk-ui-tests-e2e", allUpstreamTaint, nil) {
 		changedE2E["@gooddata/sdk-ui-tests-e2e"] = true
 	}
 
@@ -229,7 +289,7 @@ func main() {
 	}
 	if !showNeobackstop {
 		for _, dir := range neobackstopDirs {
-			if analyzer.HasTaintedImports(dir, allUpstreamTaint) {
+			if analyzer.HasTaintedImports(dir, allUpstreamTaint, nil) {
 				showNeobackstop = true
 				break
 			}
