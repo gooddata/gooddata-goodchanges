@@ -122,6 +122,9 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 	}
 
 	// Build import graph (relative imports only)
+	// TODO: handle CSS/SCSS/LESS imports (e.g. import "./styles.css") as side-effect imports.
+	// If a CSS file is changed in the diff, all files that import it should have all their
+	// exports tainted, since CSS side effects affect the entire file.
 	importGraph := make(map[string][]importEdge)
 
 	for stem, analysis := range fileAnalyses {
