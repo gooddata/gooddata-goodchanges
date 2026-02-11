@@ -1,11 +1,25 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMIT_FILE="$SCRIPT_DIR/TSGO_COMMIT"
+
 # Portable in-place sed (macOS needs -i '', Linux needs -i)
 if [[ "$(uname)" == "Darwin" ]]; then
   SEDI=(sed -i '')
 else
   SEDI=(sed -i)
+fi
+
+# Read pinned commit hash
+if [[ ! -f "$COMMIT_FILE" ]]; then
+  echo "Error: TSGO_COMMIT file not found." >&2
+  exit 1
+fi
+TSGO_REF=$(tr -d '[:space:]' < "$COMMIT_FILE")
+if [[ -z "$TSGO_REF" ]]; then
+  echo "Error: TSGO_COMMIT is empty." >&2
+  exit 1
 fi
 
 VENDOR_DIR="_vendor/typescript-go"
@@ -14,9 +28,12 @@ VENDOR_DIR="_vendor/typescript-go"
 rm -rf "$VENDOR_DIR"
 mkdir -p "_vendor"
 
-# Clone just the source (shallow, no submodules)
-echo "Cloning microsoft/typescript-go..."
-git clone --depth 1 --single-branch https://github.com/microsoft/typescript-go.git "$VENDOR_DIR"
+# Clone the pinned commit (shallow)
+echo "Cloning microsoft/typescript-go at $TSGO_REF..."
+git init "$VENDOR_DIR"
+git -C "$VENDOR_DIR" remote add origin https://github.com/microsoft/typescript-go.git
+git -C "$VENDOR_DIR" fetch --depth 1 origin "$TSGO_REF"
+git -C "$VENDOR_DIR" checkout FETCH_HEAD
 
 # Remove git history and stuff we don't need
 rm -rf "$VENDOR_DIR/.git" "$VENDOR_DIR/_tools" "$VENDOR_DIR/cmd" "$VENDOR_DIR/_submodules" "$VENDOR_DIR/testdata"
