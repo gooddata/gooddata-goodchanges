@@ -93,9 +93,10 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 }
 
 type importEdge struct {
-	fromStem   string
-	localNames []string
-	origNames  []string
+	fromStem     string
+	localNames   []string
+	origNames    []string
+	isSideEffect bool // true for unassigned imports like import "./foo"
 }
 
 // AnalyzeLibraryPackage builds a full internal file dependency graph,
@@ -148,9 +149,10 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				}
 			}
 			importGraph[stem] = append(importGraph[stem], importEdge{
-				fromStem:   resolvedStem,
-				localNames: localNames,
-				origNames:  origNames,
+				fromStem:     resolvedStem,
+				localNames:   localNames,
+				origNames:    origNames,
+				isSideEffect: len(imp.Names) == 0,
 			})
 		}
 	}
@@ -260,9 +262,15 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				continue
 			}
 
+			// Check for side-effect (unassigned) imports and named imports from the tainted source
+			hasSideEffectImport := false
 			var taintedLocalNames []string
 			for _, edge := range importGraph[importerStem] {
 				if edge.fromStem != currentStem {
+					continue
+				}
+				if edge.isSideEffect {
+					hasSideEffectImport = true
 					continue
 				}
 				for i, origName := range edge.origNames {
@@ -276,12 +284,26 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, diffT
 				}
 			}
 
-			if len(taintedLocalNames) == 0 {
+			if !hasSideEffectImport && len(taintedLocalNames) == 0 {
 				continue
 			}
 
-			newlyTainted := findTaintedSymbolsByUsage(importerAnalysis, taintedLocalNames)
+			var newlyTainted []string
 
+			// Unassigned import from tainted file: all symbols in this file are tainted
+			if hasSideEffectImport && len(currentTainted) > 0 {
+				for _, sym := range importerAnalysis.Symbols {
+					newlyTainted = append(newlyTainted, sym.Name)
+				}
+			}
+
+			// Named imports: find symbols that use the tainted imports
+			if len(taintedLocalNames) > 0 {
+				usageTainted := findTaintedSymbolsByUsage(importerAnalysis, taintedLocalNames)
+				newlyTainted = append(newlyTainted, usageTainted...)
+			}
+
+			// Handle re-exports
 			importerDir := filepath.Dir(importerStem + ".ts")
 			for _, exp := range importerAnalysis.Exports {
 				if exp.Source == "" {
