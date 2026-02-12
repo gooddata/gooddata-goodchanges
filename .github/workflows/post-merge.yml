@@ -422,7 +422,14 @@ jobs:
             cd ..
           done
 
-          echo "Built $(ls dist/ | wc -l) packages:"
+          # Generate SHA-256 hashes for all archives
+          cd dist
+          for file in *; do
+            sha256sum "$file" > "${file}.sha256"
+          done
+          cd ..
+
+          echo "Built $(ls dist/ | grep -cv '\.sha256$') packages with SHA-256 hashes:"
           ls -lh dist/
 
       - name: Create Release Body
