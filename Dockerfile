@@ -1,5 +1,6 @@
 # Stage 1: Build the Go app
-FROM 020413372491.dkr.ecr.us-east-1.amazonaws.com/pullthrough/docker.io/library/golang:1.25.6-alpine AS builder
+FROM --platform=$BUILDPLATFORM 020413372491.dkr.ecr.us-east-1.amazonaws.com/pullthrough/docker.io/library/golang:1.25.6-alpine AS builder
+ARG TARGETOS TARGETARCH
 RUN apk add --no-cache git bash sed findutils
 WORKDIR /app
 
@@ -9,7 +10,7 @@ RUN bash vendor-tsgo.sh
 RUN go mod tidy
 
 # Build the Go application
-RUN CGO_ENABLED=0 GOOS=linux go build -o goodchanges .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o goodchanges .
 
 # Stage 2: Run the app
 FROM 020413372491.dkr.ecr.us-east-1.amazonaws.com/pullthrough/docker.io/library/alpine:3.23
