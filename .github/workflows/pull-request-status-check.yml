@@ -37,7 +37,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker buildx build \
-            --platform linux/amd64,linux/arm64 \
+            --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/386,linux/ppc64le,linux/s390x \
             --tag goodchanges:${{ github.sha }} \
             --tag goodchanges:latest \
             .
@@ -49,7 +49,7 @@ jobs:
           echo "- goodchanges:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- goodchanges:latest" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Platforms: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "Platforms: linux/amd64, linux/arm64, linux/arm/v7, linux/arm/v6, linux/386, linux/ppc64le, linux/s390x" >> $GITHUB_STEP_SUMMARY
 
   fossa-scan:
     permissions:
