@@ -321,7 +321,7 @@ jobs:
     name: Create GitHub Release
     runs-on:
       group: infra1-runners-arc
-      labels: cxa-xlarge
+      labels: runners-cxa-xlarge
     needs: [ check-pr-labels, docker-build-and-publish, create-git-tag, extract-changelog ]
     if: ${{ needs.check-pr-labels.outputs.skip_publish != 'true' }}
     permissions:
