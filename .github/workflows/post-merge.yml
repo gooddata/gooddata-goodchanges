@@ -356,43 +356,12 @@ jobs:
             # Linux
             "linux/amd64"
             "linux/arm64"
-            "linux/arm/7"
-            "linux/arm/6"
-            "linux/386"
-            "linux/ppc64le"
-            "linux/s390x"
-            "linux/mips"
-            "linux/mipsle"
-            "linux/mips64"
-            "linux/mips64le"
-            "linux/riscv64"
             # macOS
             "darwin/amd64"
             "darwin/arm64"
             # Windows
             "windows/amd64"
             "windows/arm64"
-            "windows/386"
-            # FreeBSD
-            "freebsd/amd64"
-            "freebsd/arm64"
-            "freebsd/arm/7"
-            "freebsd/386"
-            # OpenBSD
-            "openbsd/amd64"
-            "openbsd/arm64"
-            "openbsd/386"
-            # NetBSD
-            "netbsd/amd64"
-            "netbsd/arm64"
-            "netbsd/386"
-            # Solaris / Illumos
-            "solaris/amd64"
-            "illumos/amd64"
-            # AIX
-            "aix/ppc64"
-            # DragonFlyBSD
-            "dragonfly/amd64"
           )
 
           for target in "${TARGETS[@]}"; do
