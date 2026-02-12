@@ -1,0 +1,7 @@
+---
+version: 3
+project:
+  id: gooddata-goodchanges
+
+telemetry:
+  scope: 'off'
