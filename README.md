@@ -2,6 +2,25 @@
 
 Granular change detection for Rush monorepos. Analyzes code changes at the AST level to determine which library exports are affected by a pull request, then propagates taint through the workspace dependency graph to identify which e2e test targets need to run.
 
+## Install
+
+```bash
+# latest version
+curl -fsSL https://raw.githubusercontent.com/gooddata/gooddata-goodchanges/master/install.sh | sh
+
+# specific version
+curl -fsSL https://raw.githubusercontent.com/gooddata/gooddata-goodchanges/master/install.sh | sh -s v0.2.5
+
+# custom install directory
+curl -fsSL https://raw.githubusercontent.com/gooddata/gooddata-goodchanges/master/install.sh | BINDIR=~/.local/bin sh
+```
+
+Or run locally:
+
+```bash
+BINDIR=~/.local/bin ./install.sh v0.2.5
+```
+
 ## How it works
 
 1. Finds the merge base commit (comparison point)
@@ -219,6 +238,7 @@ internal/
     rush.go                      # Rush config, dependency graph, project configs
   tsparse/
     tsparse.go                   # TypeScript parser (imports, exports, symbols)
+install.sh                       # Standalone binary installer
 vendor-tsgo.sh                   # Vendor script for typescript-go
 TSGO_COMMIT                      # Pinned typescript-go commit hash
 Dockerfile                       # Multi-stage Docker build
