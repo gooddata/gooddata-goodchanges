@@ -54,7 +54,17 @@ jobs:
           echo "commit_hash=$HASH" >> $GITHUB_OUTPUT
           echo "short_hash=${HASH:0:12}" >> $GITHUB_OUTPUT
 
+          CURRENT=$(cat TSGO_COMMIT | tr -d '[:space:]')
+          if [[ "$HASH" == "$CURRENT" ]]; then
+            echo "Already on $HASH — nothing to update"
+            echo "NEEDS_UPDATE=false" >> $GITHUB_OUTPUT
+          else
+            echo "Will update from $CURRENT to $HASH"
+            echo "NEEDS_UPDATE=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Update TSGO_COMMIT and vendor
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         run: |
           HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
           printf '%s' "$HASH" > TSGO_COMMIT
@@ -62,6 +72,7 @@ jobs:
           bash vendor-tsgo.sh
 
       - name: Update Dockerfile Go version
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         run: |
           GO_VERSION="${{ steps.go-version.outputs.version }}"
           sed -i "s|golang:[0-9.]*-alpine|golang:${GO_VERSION}-alpine|g" Dockerfile
@@ -69,15 +80,18 @@ jobs:
           cat Dockerfile
 
       - name: Update go.mod Go version
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         run: |
           GO_VERSION="${{ steps.go-version.outputs.version }}"
           go mod edit -go="${GO_VERSION}"
           echo "Updated go.mod to Go $GO_VERSION"
 
       - name: Tidy go modules
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         run: go mod tidy
 
       - name: Bump patch version and update changelog
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         shell: bash
         run: |
           SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
@@ -116,6 +130,7 @@ jobs:
           echo "Updated CHANGELOG.md for ${NEW_VERSION}"
 
       - name: Delete remote branch if exists
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         env:
           GH_TOKEN: ${{ secrets.TOKEN_GITHUB_YENKINS }}
         run: |
@@ -129,6 +144,7 @@ jobs:
           fi
 
       - name: Create branch and commit changes
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         id: create-branch
         run: |
           SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
@@ -154,7 +170,7 @@ jobs:
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
       - name: Push branch
-        if: steps.create-branch.outputs.has_changes == 'true'
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true' && steps.create-branch.outputs.has_changes == 'true'
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 5
@@ -163,7 +179,7 @@ jobs:
           command: git push origin ${{ steps.create-branch.outputs.branch_name }}
 
       - name: Create Pull Request
-        if: steps.create-branch.outputs.has_changes == 'true'
+        if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true' && steps.create-branch.outputs.has_changes == 'true'
         id: create-pr
         uses: ./.github/actions/github/create-pr
         with:
