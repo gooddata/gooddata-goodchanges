@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"goodchanges/internal/git"
@@ -954,6 +955,141 @@ func parseScssUses(filePath string) []string {
 		}
 	}
 	return uses
+}
+
+// FindAffectedFiles returns a list of affected source files (relative to projectFolder)
+// within the given directory. A file is affected if it:
+//   - was directly changed
+//   - imports tainted symbols from upstream libraries
+//   - imports from a file that is affected (transitive, BFS)
+func FindAffectedFiles(dir string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string) []string {
+	fullDir := filepath.Join(projectFolder, dir)
+
+	allFiles, err := globSourceFiles(fullDir)
+	if err != nil {
+		return nil
+	}
+
+	// Parse all files in the directory
+	type fileInfo struct {
+		relToProject string // relative to projectFolder (e.g. "stories/foo.stories.tsx")
+		relToDir     string // relative to dir (e.g. "foo.stories.tsx")
+		analysis     *tsparse.FileAnalysis
+	}
+	fileMap := make(map[string]*fileInfo) // keyed by relToDir
+	for _, relToDir := range allFiles {
+		relToProject := filepath.Join(dir, relToDir)
+		fullPath := filepath.Join(fullDir, relToDir)
+		analysis, err := tsparse.ParseFile(fullPath)
+		if err != nil {
+			continue
+		}
+		fileMap[relToDir] = &fileInfo{
+			relToProject: relToProject,
+			relToDir:     relToDir,
+			analysis:     analysis,
+		}
+	}
+
+	affected := make(map[string]bool)
+
+	// Seed from directly changed files
+	for _, f := range changedFiles {
+		if !strings.HasPrefix(f, fullDir+"/") {
+			continue
+		}
+		rel, _ := filepath.Rel(fullDir, f)
+		if _, ok := fileMap[rel]; ok {
+			affected[rel] = true
+		}
+	}
+
+	// Seed from files importing tainted upstream symbols
+	for relToDir, fi := range fileMap {
+		if affected[relToDir] {
+			continue
+		}
+		for _, imp := range fi.analysis.Imports {
+			if strings.HasPrefix(imp.Source, ".") {
+				continue
+			}
+			affectedNames, ok := upstreamTaint[imp.Source]
+			if !ok || len(affectedNames) == 0 {
+				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+					affected[relToDir] = true
+					break
+				}
+				continue
+			}
+			if len(imp.Names) == 0 {
+				affected[relToDir] = true
+				break
+			}
+			for _, name := range imp.Names {
+				if strings.HasPrefix(name, "*:") || affectedNames[name] {
+					affected[relToDir] = true
+					break
+				}
+			}
+			if affected[relToDir] {
+				break
+			}
+		}
+	}
+
+	if len(affected) == 0 {
+		return nil
+	}
+
+	// Build local import graph: importer -> [imported files]
+	// and reverse: imported file -> [importers]
+	reverseImports := make(map[string][]string)
+	for relToDir, fi := range fileMap {
+		fileDir := filepath.Dir(filepath.Join(fullDir, relToDir))
+		for _, imp := range fi.analysis.Imports {
+			if !strings.HasPrefix(imp.Source, ".") {
+				continue
+			}
+			resolved := resolveImportSource(fileDir, imp.Source, fullDir)
+			if resolved == "" {
+				continue
+			}
+			// resolved is relative to fullDir; find matching file
+			for candidate := range fileMap {
+				if stripTSExtension(candidate) == resolved {
+					reverseImports[candidate] = append(reverseImports[candidate], relToDir)
+					break
+				}
+			}
+		}
+	}
+
+	// BFS propagation: if file A is affected and file B imports from A, B is affected
+	queue := make([]string, 0, len(affected))
+	for f := range affected {
+		queue = append(queue, f)
+	}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, importer := range reverseImports[current] {
+			if !affected[importer] {
+				affected[importer] = true
+				queue = append(queue, importer)
+			}
+		}
+	}
+
+	// Collect results relative to projectFolder
+	var result []string
+	for relToDir := range affected {
+		fi := fileMap[relToDir]
+		if fi != nil {
+			result = append(result, fi.relToProject)
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func globSourceFiles(projectFolder string) ([]string, error) {
