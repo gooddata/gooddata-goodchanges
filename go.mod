@@ -1,6 +1,6 @@
 module goodchanges
 
-go 1.25.6
+go 1.26.0
 
 replace goodchanges/tsgo-vendor => ./_vendor/typescript-go
 
