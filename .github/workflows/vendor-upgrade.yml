@@ -77,6 +77,37 @@ jobs:
       - name: Tidy go modules
         run: go mod tidy
 
+      - name: Bump patch version and update changelog
+        run: |
+          SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
+          HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
+          TODAY=$(date +%Y-%m-%d)
+
+          # Bump patch version
+          CURRENT=$(cat VERSION | tr -d '[:space:]')
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          NEW_PATCH=$((patch + 1))
+          NEW_VERSION="${major}.${minor}.${NEW_PATCH}"
+          printf '%s' "$NEW_VERSION" > VERSION
+          echo "Bumped version: ${CURRENT} -> ${NEW_VERSION}"
+
+          # Build new changelog entry
+          ENTRY="## [${NEW_VERSION}] - ${TODAY}
+
+### Changed
+- Upgrade vendored typescript-go to [\`${SHORT}\`](https://github.com/microsoft/typescript-go/commit/${HASH})
+"
+          LINK="[${NEW_VERSION}]: https://github.com/gooddata/gooddata-goodchanges/compare/v${CURRENT}...v${NEW_VERSION}"
+
+          # Insert entry before the first existing version header, and link before existing links
+          awk -v entry="$ENTRY" -v link="$LINK" '
+            !entry_done && /^## \[/ { printf "%s\n", entry; entry_done=1 }
+            !link_done && /^\[/ { printf "%s\n", link; link_done=1 }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+
+          echo "Updated CHANGELOG.md for ${NEW_VERSION}"
+
       - name: Delete remote branch if exists
         env:
           GH_TOKEN: ${{ secrets.TOKEN_GITHUB_YENKINS }}
