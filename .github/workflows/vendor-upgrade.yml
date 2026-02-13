@@ -78,6 +78,7 @@ jobs:
         run: go mod tidy
 
       - name: Bump patch version and update changelog
+        shell: bash
         run: |
           SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
           HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
@@ -91,18 +92,24 @@ jobs:
           printf '%s' "$NEW_VERSION" > VERSION
           echo "Bumped version: ${CURRENT} -> ${NEW_VERSION}"
 
-          # Build new changelog entry
-          ENTRY="## [${NEW_VERSION}] - ${TODAY}
+          # Write changelog entry to temp file
+          cat > /tmp/changelog_entry.md <<EOF
+          ## [${NEW_VERSION}] - ${TODAY}
 
-### Changed
-- Upgrade vendored typescript-go to [\`${SHORT}\`](https://github.com/microsoft/typescript-go/commit/${HASH})
-"
+          ### Changed
+          - Upgrade vendored typescript-go to [\`${SHORT}\`](https://github.com/microsoft/typescript-go/commit/${HASH})
+
+          EOF
+
+          # Strip leading whitespace from heredoc (each line has 10 spaces of indentation)
+          sed -i 's/^          //' /tmp/changelog_entry.md
+
           LINK="[${NEW_VERSION}]: https://github.com/gooddata/gooddata-goodchanges/compare/v${CURRENT}...v${NEW_VERSION}"
 
-          # Insert entry before the first existing version header, and link before existing links
-          awk -v entry="$ENTRY" -v link="$LINK" '
-            !entry_done && /^## \[/ { printf "%s\n", entry; entry_done=1 }
-            !link_done && /^\[/ { printf "%s\n", link; link_done=1 }
+          # Insert entry before first version header, link before first existing link
+          awk -v link="$LINK" '
+            !entry_done && /^## \[/ { while ((getline line < "/tmp/changelog_entry.md") > 0) print line; entry_done=1 }
+            !link_done && /^\[/ { print link; link_done=1 }
             { print }
           ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
 
