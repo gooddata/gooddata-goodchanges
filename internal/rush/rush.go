@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 type Project struct {
@@ -147,7 +149,7 @@ func (pc *ProjectConfig) IsIgnored(relPath string) bool {
 		return false
 	}
 	for _, pattern := range pc.Ignores {
-		if matched, _ := filepath.Match(pattern, relPath); matched {
+		if matched, _ := doublestar.Match(pattern, relPath); matched {
 			return true
 		}
 	}
