@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -364,6 +365,18 @@ func main() {
 		return e2eList[i].Name < e2eList[j].Name
 	})
 
+	// Filter targets if TARGETS env is set (comma-delimited, supports * globs)
+	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
+		patterns := strings.Split(targetsEnv, ",")
+		var filtered []*TargetResult
+		for _, result := range e2eList {
+			if matchesTargetFilter(result.Name, patterns) {
+				filtered = append(filtered, result)
+			}
+		}
+		e2eList = filtered
+	}
+
 	if flagLog {
 		logf("Affected e2e packages (%d):\n", len(e2eList))
 		for _, result := range e2eList {
@@ -416,4 +429,30 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[str
 		}
 	}
 	return result
+}
+
+// matchesTargetFilter checks if a target name matches any of the given patterns.
+// Patterns support * as a wildcard matching any characters (including /).
+func matchesTargetFilter(name string, patterns []string) bool {
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// Convert glob pattern to regex: * -> .*, escape the rest
+		var re strings.Builder
+		re.WriteString("^")
+		for _, ch := range p {
+			if ch == '*' {
+				re.WriteString(".*")
+			} else {
+				re.WriteString(regexp.QuoteMeta(string(ch)))
+			}
+		}
+		re.WriteString("$")
+		if matched, _ := regexp.MatchString(re.String(), name); matched {
+			return true
+		}
+	}
+	return false
 }

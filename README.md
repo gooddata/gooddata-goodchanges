@@ -49,13 +49,14 @@ JSON array of target objects:
 
 ## Environment variables
 
-| Variable | Description | Default |
-|---|---|---|
-| `LOG_LEVEL` | Logging verbosity. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing to stderr | _(no logging)_ |
-| `INCLUDE_TYPES` | When set to any non-empty value, includes type-only changes (interfaces, type aliases, type annotations) in taint propagation | _(disabled)_ |
-| `INCLUDE_CSS` | When set to any non-empty value, enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains | _(disabled)_ |
-| `COMPARE_COMMIT` | Specific git commit hash to compare against (overrides branch-based comparison) | _(empty)_ |
-| `COMPARE_BRANCH` | Git branch to compute merge base against | `origin/master` |
+| Variable         | Description                                                                                                                   | Default         |
+|------------------|-------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `LOG_LEVEL`      | Logging verbosity. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing to stderr                              | _(no logging)_  |
+| `INCLUDE_TYPES`  | When set to any non-empty value, includes type-only changes (interfaces, type aliases, type annotations) in taint propagation | _(disabled)_    |
+| `INCLUDE_CSS`    | When set to any non-empty value, enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains      | _(disabled)_    |
+| `COMPARE_COMMIT` | Specific git commit hash to compare against (overrides branch-based comparison)                                               | _(empty)_       |
+| `COMPARE_BRANCH` | Git branch to compute merge base against                                                                                      | `origin/master` |
+| `TARGETS`        | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`).         | _(all targets)_ |
 
 ## Library vs app detection
 
@@ -127,13 +128,13 @@ Each `changeDirs` entry is an object with:
 
 ### Fields reference
 
-| Field | Type | Used by | Description |
-|---|---|---|---|
-| `type` | `"target"` \| `"virtual-target"` | Both | Declares what kind of target this project is |
-| `app` | `string` | Target | Package name of the corresponding app this e2e package tests |
-| `targetName` | `string` | Virtual target | Output name emitted when the virtual target is triggered |
-| `changeDirs` | `ChangeDir[]` | Virtual target | Directories to watch. Each entry: `{"path": "...", "type?": "fine-grained"}` |
-| `ignores` | `string[]` | Both | Glob patterns for files to exclude from change detection |
+| Field        | Type                             | Used by        | Description                                                                  |
+|--------------|----------------------------------|----------------|------------------------------------------------------------------------------|
+| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this project is                                 |
+| `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                 |
+| `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                     |
+| `changeDirs` | `ChangeDir[]`                    | Virtual target | Directories to watch. Each entry: `{"path": "...", "type?": "fine-grained"}` |
+| `ignores`    | `string[]`                       | Both           | Glob patterns for files to exclude from change detection                     |
 
 The `.goodchangesrc.json` file itself is always ignored.
 
