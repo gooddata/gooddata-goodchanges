@@ -251,10 +251,19 @@ func main() {
 	}
 	changedE2E := make(map[string]*TargetResult)
 
+	// Parse TARGETS filter early to skip expensive detection for non-matching targets
+	var targetPatterns []string
+	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
+		targetPatterns = strings.Split(targetsEnv, ",")
+	}
+
 	for _, rp := range rushConfig.Projects {
 		cfg := rush.LoadProjectConfig(rp.ProjectFolder)
 
 		if cfg.IsTarget() {
+			if len(targetPatterns) > 0 && !matchesTargetFilter(rp.PackageName, targetPatterns) {
+				continue
+			}
 			// Target detection with 4 conditions:
 			//   1. Direct file changes (outside ignores)
 			//   2. External dep changes in lockfile
@@ -312,6 +321,9 @@ func main() {
 				}
 			}
 		} else if cfg.IsVirtualTarget() && cfg.TargetName != nil {
+			if len(targetPatterns) > 0 && !matchesTargetFilter(*cfg.TargetName, targetPatterns) {
+				continue
+			}
 			// Virtual target: check changeDirs for file changes or tainted imports.
 			// Normal dirs trigger a full run; fine-grained dirs collect specific affected files.
 			normalTriggered := false
@@ -364,18 +376,6 @@ func main() {
 	sort.Slice(e2eList, func(i, j int) bool {
 		return e2eList[i].Name < e2eList[j].Name
 	})
-
-	// Filter targets if TARGETS env is set (comma-delimited, supports * globs)
-	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
-		patterns := strings.Split(targetsEnv, ",")
-		var filtered []*TargetResult
-		for _, result := range e2eList {
-			if matchesTargetFilter(result.Name, patterns) {
-				filtered = append(filtered, result)
-			}
-		}
-		e2eList = filtered
-	}
 
 	if flagLog {
 		logf("Affected e2e packages (%d):\n", len(e2eList))
