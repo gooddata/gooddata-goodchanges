@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"goodchanges/internal/analyzer"
 	"goodchanges/internal/git"
 	"goodchanges/internal/lockfile"
@@ -354,29 +356,34 @@ func main() {
 			if len(targetPatterns) > 0 && !matchesTargetFilter(*cfg.TargetName, targetPatterns) {
 				continue
 			}
-			// Virtual target: check changeDirs for file changes or tainted imports.
-			// Normal dirs trigger a full run; fine-grained dirs collect specific affected files.
+			// Virtual target: check changeDirs globs for file changes or tainted imports.
+			// Normal globs trigger a full run; fine-grained globs collect specific affected files.
 			normalTriggered := false
 			var fineGrainedDetections []string
 
 			for _, cd := range cfg.ChangeDirs {
-				fullDir := filepath.Join(rp.ProjectFolder, cd.Path)
-
 				if cd.IsFineGrained() {
-					detected := analyzer.FindAffectedFiles(cd.Path, allUpstreamTaint, changedFiles, rp.ProjectFolder)
+					detected := analyzer.FindAffectedFiles(cd.Glob, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg)
 					if len(detected) > 0 {
 						fineGrainedDetections = append(fineGrainedDetections, detected...)
 					}
 				} else {
-					// Normal: check for any file changes or tainted imports
+					// Normal: check for any changed file matching the glob
 					for _, f := range changedFiles {
-						if strings.HasPrefix(f, fullDir+"/") {
+						if !strings.HasPrefix(f, rp.ProjectFolder+"/") {
+							continue
+						}
+						relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
+						if cfg.IsIgnored(relPath) {
+							continue
+						}
+						if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
 							normalTriggered = true
 							break
 						}
 					}
 					if !normalTriggered {
-						if analyzer.HasTaintedImports(fullDir, allUpstreamTaint, nil) {
+						if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, cfg) {
 							normalTriggered = true
 						}
 					}

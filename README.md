@@ -95,36 +95,38 @@ Marks a project as an e2e test package. The package name is included in the outp
 
 ### Virtual target
 
-An aggregated target that watches specific directories across a project. Does not correspond to a real package name in the output -- uses `targetName` instead.
+An aggregated target that uses glob patterns to match files across a project. Does not correspond to a real package name in the output -- uses `targetName` instead.
 
 ```json
 {
   "type": "virtual-target",
   "targetName": "neobackstop",
   "changeDirs": [
-    { "path": "src" },
-    { "path": "scenarios" },
-    { "path": "stories", "type": "fine-grained" },
-    { "path": "neobackstop" }
+    { "glob": "src/**/*" },
+    { "glob": "scenarios/**/*" },
+    { "glob": "stories/**/*.stories.tsx", "type": "fine-grained" },
+    { "glob": "neobackstop/**/*" }
   ]
 }
 ```
 
 Each `changeDirs` entry is an object with:
 
-- `path` -- directory to watch (relative to project root)
+- `glob` -- glob pattern to match files (relative to project root). Uses doublestar syntax: `*` matches files in current directory only, `**/*` matches all nested files, `**/*.stories.tsx` matches specific patterns recursively.
 - `type` -- optional, set to `"fine-grained"` for granular file-level detection
 
-**Normal directories** (no `type` or omitted): any file change or tainted import triggers a full run.
+**Ignores override globs:** if a file matches a `changeDirs` glob but also matches an `ignores` pattern, the file is excluded.
 
-**Fine-grained directories** (`"type": "fine-grained"`): instead of triggering a full run, collects the specific affected files. A file is affected if it:
+**Normal globs** (no `type` or omitted): any matching file change or tainted import triggers a full run.
+
+**Fine-grained globs** (`"type": "fine-grained"`): instead of triggering a full run, collects the specific affected TS/TSX source files. A file is affected if it:
 - Was directly changed
 - Imports tainted symbols from upstream workspace libraries
-- Imports from a file that is affected (transitive within the directory)
+- Imports from a file that is affected (transitive within the matched set)
 
 **Output behavior:**
-- If any **normal** directory triggers: `{"name": "neobackstop"}` (full run, no detections)
-- If **only fine-grained** directories have detections: `{"name": "neobackstop", "detections": ["stories/Button.stories.tsx"]}` (specific files)
+- If any **normal** glob triggers: `{"name": "neobackstop"}` (full run, no detections)
+- If **only fine-grained** globs have detections: `{"name": "neobackstop", "detections": ["stories/Button.stories.tsx"]}` (specific files)
 
 ### Fields reference
 
@@ -133,7 +135,7 @@ Each `changeDirs` entry is an object with:
 | `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this project is                                 |
 | `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                 |
 | `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                     |
-| `changeDirs` | `ChangeDir[]`                    | Virtual target | Directories to watch. Each entry: `{"path": "...", "type?": "fine-grained"}` |
+| `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "type?": "fine-grained"}` |
 | `ignores`    | `string[]`                       | Both           | Glob patterns for files to exclude from change detection                     |
 
 The `.goodchangesrc.json` file itself is always ignored.
