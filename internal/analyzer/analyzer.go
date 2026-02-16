@@ -322,15 +322,17 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 		fileAnalyses[stem] = analysis
 	}
 
+	// Collect changed CSS/SCSS files in this package (relative to projectFolder, no extension)
+	changedStyleFiles := make(map[string]bool)
+	for _, f := range projectChangedFiles {
+		relToProject := strings.TrimPrefix(f, projectFolder+"/")
+		ext := strings.ToLower(filepath.Ext(relToProject))
+		if ext == ".scss" || ext == ".css" {
+			changedStyleFiles[relToProject] = true
+		}
+	}
+
 	// Build import graph (relative imports only)
-	// TODO: handle SCSS/CSS/LESS change detection and taint propagation, in three steps:
-	//   Step 1 (basic): if any SCSS/CSS file changes in a package, taint ALL CSS/SCSS files
-	//     in that package. Any TS/CSS import of a tainted CSS file becomes tainted (unassigned
-	//     import → taint all exports in the importing file).
-	//   Step 2 (CSS modules): handle CSS module files properly — the import is unassigned
-	//     (import "./styles.css"), so taint the importing TS file and all its exports.
-	//   Step 3 (granular, if possible): if an SCSS file changes and it maps to a specific CSS
-	//     output file, only that CSS file becomes tainted (instead of all CSS files in the package).
 	importGraph := make(map[string][]importEdge)
 
 	for stem, analysis := range fileAnalyses {
@@ -444,6 +446,36 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 			}
 			for _, s := range affected {
 				tainted[stem][s] = true
+			}
+		}
+	}
+
+	// Seed taint from changed CSS/SCSS files within this package.
+	// If a TS file has a relative import to a changed style file (e.g. import "./styles.scss"),
+	// taint all symbols in that TS file (style imports are side-effect imports).
+	if len(changedStyleFiles) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if !strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if !isStyleImport(imp.Source) {
+					continue
+				}
+				// Resolve the style import relative to project folder
+				fileDir := filepath.Dir(stem + ".ts")
+				resolved := filepath.Join(fileDir, imp.Source)
+				resolved = filepath.Clean(resolved)
+				if changedStyleFiles[resolved] {
+					if tainted[stem] == nil {
+						tainted[stem] = make(map[string]bool)
+					}
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+					debugf("    %s: all symbols tainted via local style import %s", stem, imp.Source)
+					break
+				}
 			}
 		}
 	}
