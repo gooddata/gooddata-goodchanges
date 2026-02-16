@@ -1092,12 +1092,9 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		return nil
 	}
 
-	// Filter to files matching the glob (and not ignored)
-	type fileInfo struct {
-		rel      string // relative to projectFolder
-		analysis *tsparse.FileAnalysis
-	}
-	fileMap := make(map[string]*fileInfo) // keyed by rel
+	// Filter to files matching the glob (and not ignored), keyed by stem
+	fileAnalyses := make(map[string]*tsparse.FileAnalysis) // keyed by stem
+	stemToRel := make(map[string]string)                   // stem -> original rel path
 	for _, rel := range allFiles {
 		if matched, _ := doublestar.Match(globPattern, rel); !matched {
 			continue
@@ -1110,18 +1107,100 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		if err != nil {
 			continue
 		}
-		fileMap[rel] = &fileInfo{rel: rel, analysis: analysis}
+		stem := stripTSExtension(rel)
+		fileAnalyses[stem] = analysis
+		stemToRel[stem] = rel
 	}
 
-	affected := make(map[string]bool)
+	// Build import graph (relative imports + re-exports)
+	localImportGraph := make(map[string][]importEdge)
+	for stem, analysis := range fileAnalyses {
+		fileDir := filepath.Dir(stem + ".ts")
+		for _, imp := range analysis.Imports {
+			if !strings.HasPrefix(imp.Source, ".") {
+				continue
+			}
+			resolvedStem := resolveImportSource(fileDir, imp.Source, projectFolder)
+			if resolvedStem == "" {
+				continue
+			}
+			if _, ok := fileAnalyses[resolvedStem]; !ok {
+				continue
+			}
+			var localNames, origNames []string
+			for _, name := range imp.Names {
+				if strings.HasPrefix(name, "*:") {
+					localNames = append(localNames, name)
+					origNames = append(origNames, "*")
+				} else {
+					localNames = append(localNames, name)
+					origNames = append(origNames, name)
+				}
+			}
+			localImportGraph[stem] = append(localImportGraph[stem], importEdge{
+				fromStem:     resolvedStem,
+				localNames:   localNames,
+				origNames:    origNames,
+				isSideEffect: len(imp.Names) == 0,
+			})
+		}
+		// Re-exports as import edges
+		for _, exp := range analysis.Exports {
+			if exp.Source == "" || !strings.HasPrefix(exp.Source, ".") {
+				continue
+			}
+			resolvedStem := resolveImportSource(fileDir, exp.Source, projectFolder)
+			if resolvedStem == "" {
+				continue
+			}
+			if _, ok := fileAnalyses[resolvedStem]; !ok {
+				continue
+			}
+			alreadyHasEdge := false
+			for _, edge := range localImportGraph[stem] {
+				if edge.fromStem == resolvedStem {
+					alreadyHasEdge = true
+					break
+				}
+			}
+			if alreadyHasEdge {
+				continue
+			}
+			var localNames, origNames []string
+			if exp.IsStar {
+				localNames = append(localNames, "*:__reexport__")
+				origNames = append(origNames, "*")
+			} else {
+				localNames = append(localNames, exp.LocalName)
+				origNames = append(origNames, exp.LocalName)
+			}
+			localImportGraph[stem] = append(localImportGraph[stem], importEdge{
+				fromStem:   resolvedStem,
+				localNames: localNames,
+				origNames:  origNames,
+			})
+		}
+	}
 
-	// Seed from directly changed files (AST diff to filter out no-op changes)
+	// Build reverse import map for BFS traversal
+	reverseImports := make(map[string][]string)
+	for stem, edges := range localImportGraph {
+		for _, edge := range edges {
+			reverseImports[edge.fromStem] = append(reverseImports[edge.fromStem], stem)
+		}
+	}
+
+	// Symbol-level taint map: stem -> set of tainted symbol names
+	tainted := make(map[string]map[string]bool)
+
+	// Seed from AST diff of directly changed files
 	for _, f := range changedFiles {
 		if !strings.HasPrefix(f, projectFolder+"/") {
 			continue
 		}
 		rel, _ := filepath.Rel(projectFolder, f)
-		fi, ok := fileMap[rel]
+		stem := stripTSExtension(rel)
+		analysis, ok := fileAnalyses[stem]
 		if !ok {
 			continue
 		}
@@ -1133,135 +1212,239 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		if oldContent != "" {
 			oldAnalysis, _ = tsparse.ParseContent(oldContent, f)
 		}
-		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, fi.analysis, oldContent, includeTypes)
+		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, analysis, oldContent, includeTypes)
 		if len(changedSymbols) > 0 || oldAnalysis == nil {
-			// File has actual symbol changes (or is newly added)
-			affected[rel] = true
+			if tainted[stem] == nil {
+				tainted[stem] = make(map[string]bool)
+			}
+			for _, s := range changedSymbols {
+				tainted[stem][s] = true
+			}
+			// New file: taint all symbols
+			if oldAnalysis == nil {
+				for _, sym := range analysis.Symbols {
+					tainted[stem][sym.Name] = true
+				}
+			}
 		}
 	}
 
-	// Seed from files importing tainted upstream symbols
-	for rel, fi := range fileMap {
-		if affected[rel] {
-			continue
-		}
-		for _, imp := range fi.analysis.Imports {
-			if strings.HasPrefix(imp.Source, ".") {
-				continue
-			}
-			affectedNames, ok := upstreamTaint[imp.Source]
-			if !ok || len(affectedNames) == 0 {
-				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
-					affected[rel] = true
-					break
+	// Seed from upstream workspace taint
+	if len(upstreamTaint) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if strings.HasPrefix(imp.Source, ".") {
+					continue
 				}
-				continue
-			}
-			if len(imp.Names) == 0 {
-				affected[rel] = true
-				break
-			}
-			for _, name := range imp.Names {
-				if strings.HasPrefix(name, "*:") || affectedNames[name] {
-					affected[rel] = true
-					break
+				affectedNames, ok := upstreamTaint[imp.Source]
+				if !ok || len(affectedNames) == 0 {
+					if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+						if tainted[stem] == nil {
+							tainted[stem] = make(map[string]bool)
+						}
+						for _, sym := range analysis.Symbols {
+							tainted[stem][sym.Name] = true
+						}
+					}
+					continue
 				}
-			}
-			if affected[rel] {
-				break
+				if len(imp.Names) == 0 {
+					// Unassigned import: taint all symbols
+					if tainted[stem] == nil {
+						tainted[stem] = make(map[string]bool)
+					}
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+					continue
+				}
+				var taintedLocalNames []string
+				for _, name := range imp.Names {
+					if strings.HasPrefix(name, "*:") {
+						taintedLocalNames = append(taintedLocalNames, name)
+					} else if affectedNames[name] {
+						taintedLocalNames = append(taintedLocalNames, name)
+					}
+				}
+				if len(taintedLocalNames) > 0 {
+					usageTainted := findTaintedSymbolsByUsage(analysis, taintedLocalNames)
+					if len(usageTainted) > 0 {
+						if tainted[stem] == nil {
+							tainted[stem] = make(map[string]bool)
+						}
+						for _, s := range usageTainted {
+							tainted[stem][s] = true
+						}
+					}
+				}
 			}
 		}
 	}
 
 	// Seed from tainted external dependencies (lockfile changes)
 	if len(taintedExternalDeps) > 0 {
-		for rel, fi := range fileMap {
-			if affected[rel] {
-				continue
-			}
-			for _, imp := range fi.analysis.Imports {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
 				if strings.HasPrefix(imp.Source, ".") {
 					continue
 				}
-				if isFromTaintedDep(imp.Source, taintedExternalDeps) {
-					affected[rel] = true
-					break
+				if !isFromTaintedDep(imp.Source, taintedExternalDeps) {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if len(imp.Names) == 0 {
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+				} else {
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
 				}
 			}
 		}
 	}
 
-	if len(affected) == 0 {
+	if len(tainted) == 0 {
 		return nil
 	}
 
-	// Build local import graph (reverse: imported file -> importers/re-exporters)
-	reverseImports := make(map[string][]string)
-	for rel, fi := range fileMap {
-		fileDir := filepath.Dir(rel)
-		for _, imp := range fi.analysis.Imports {
-			if !strings.HasPrefix(imp.Source, ".") {
-				continue
-			}
-			resolved := resolveImportSource(fileDir, imp.Source, projectFolder)
-			if resolved == "" {
-				continue
-			}
-			for candidate := range fileMap {
-				if stripTSExtension(candidate) == resolved {
-					reverseImports[candidate] = append(reverseImports[candidate], rel)
-					break
-				}
-			}
-		}
-		// Also follow re-exports (export { X } from "./foo" / export * from "./foo")
-		// so barrel files don't break the propagation chain.
-		for _, exp := range fi.analysis.Exports {
-			if exp.Source == "" || !strings.HasPrefix(exp.Source, ".") {
-				continue
-			}
-			resolved := resolveImportSource(fileDir, exp.Source, projectFolder)
-			if resolved == "" {
-				continue
-			}
-			// Avoid duplicate edge if already added via imports
-			alreadyHasEdge := false
-			for _, existing := range reverseImports[resolved] {
-				if existing == rel {
-					alreadyHasEdge = true
-					break
-				}
-			}
-			if alreadyHasEdge {
-				continue
-			}
-			for candidate := range fileMap {
-				if stripTSExtension(candidate) == resolved {
-					reverseImports[candidate] = append(reverseImports[candidate], rel)
-					break
-				}
-			}
-		}
-	}
-
-	// BFS propagation: if file A is affected and file B imports from A, B is affected
-	queue := make([]string, 0, len(affected))
-	for f := range affected {
-		queue = append(queue, f)
+	// Symbol-level BFS propagation (same engine as AnalyzeLibraryPackage)
+	queue := make([]string, 0, len(tainted))
+	for stem := range tainted {
+		queue = append(queue, stem)
 	}
 	for len(queue) > 0 {
-		current := queue[0]
+		currentStem := queue[0]
 		queue = queue[1:]
-		for _, importer := range reverseImports[current] {
-			if !affected[importer] {
-				affected[importer] = true
-				queue = append(queue, importer)
+		currentTainted := tainted[currentStem]
+
+		for _, importerStem := range reverseImports[currentStem] {
+			importerAnalysis := fileAnalyses[importerStem]
+			if importerAnalysis == nil {
+				continue
+			}
+
+			hasSideEffectImport := false
+			var taintedLocalNames []string
+			for _, edge := range localImportGraph[importerStem] {
+				if edge.fromStem != currentStem {
+					continue
+				}
+				if edge.isSideEffect {
+					hasSideEffectImport = true
+					continue
+				}
+				for i, origName := range edge.origNames {
+					if origName == "*" {
+						if len(currentTainted) > 0 {
+							taintedLocalNames = append(taintedLocalNames, edge.localNames[i])
+						}
+					} else if currentTainted[origName] || currentTainted["*"] {
+						taintedLocalNames = append(taintedLocalNames, edge.localNames[i])
+					}
+				}
+			}
+
+			if !hasSideEffectImport && len(taintedLocalNames) == 0 {
+				continue
+			}
+
+			var newlyTainted []string
+
+			if hasSideEffectImport && len(currentTainted) > 0 {
+				for _, sym := range importerAnalysis.Symbols {
+					newlyTainted = append(newlyTainted, sym.Name)
+				}
+			}
+
+			if len(taintedLocalNames) > 0 {
+				usageTainted := findTaintedSymbolsByUsage(importerAnalysis, taintedLocalNames)
+				newlyTainted = append(newlyTainted, usageTainted...)
+			}
+
+			// Handle re-exports
+			importerDir := filepath.Dir(importerStem + ".ts")
+			for _, exp := range importerAnalysis.Exports {
+				if exp.Source == "" {
+					for _, tln := range taintedLocalNames {
+						cleanName := tln
+						if strings.HasPrefix(cleanName, "*:") {
+							cleanName = strings.TrimPrefix(cleanName, "*:")
+						}
+						if exp.LocalName == cleanName {
+							newlyTainted = append(newlyTainted, exp.Name)
+						}
+					}
+				} else {
+					reExpStem := resolveImportSource(importerDir, exp.Source, projectFolder)
+					if reExpStem == currentStem {
+						if exp.IsStar {
+							for name := range currentTainted {
+								newlyTainted = append(newlyTainted, name)
+							}
+						} else if currentTainted[exp.LocalName] || currentTainted["*"] {
+							newlyTainted = append(newlyTainted, exp.Name)
+						}
+					}
+				}
+			}
+
+			// Intra-file propagation
+			if len(newlyTainted) > 0 && importerAnalysis.SourceFile != nil {
+				taintedSet := make(map[string]bool)
+				for _, n := range newlyTainted {
+					taintedSet[n] = true
+				}
+				sourceText := importerAnalysis.SourceFile.Text()
+				lineMap := importerAnalysis.SourceFile.ECMALineMap()
+				changed := true
+				for changed {
+					changed = false
+					for _, sym := range importerAnalysis.Symbols {
+						if taintedSet[sym.Name] {
+							continue
+						}
+						bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
+						for tName := range taintedSet {
+							if strings.Contains(bodyText, tName) {
+								taintedSet[sym.Name] = true
+								newlyTainted = append(newlyTainted, sym.Name)
+								changed = true
+								break
+							}
+						}
+					}
+				}
+			}
+
+			if len(newlyTainted) == 0 {
+				continue
+			}
+
+			if tainted[importerStem] == nil {
+				tainted[importerStem] = make(map[string]bool)
+			}
+			addedNew := false
+			for _, name := range newlyTainted {
+				if !tainted[importerStem][name] {
+					tainted[importerStem][name] = true
+					addedNew = true
+				}
+			}
+			if addedNew {
+				queue = append(queue, importerStem)
 			}
 		}
 	}
 
+	// Collect affected files (any file with tainted symbols)
 	var result []string
-	for rel := range affected {
+	for stem := range tainted {
+		rel := stemToRel[stem]
 		if filterPattern != "" {
 			if matched, _ := doublestar.Match(filterPattern, rel); !matched {
 				continue
