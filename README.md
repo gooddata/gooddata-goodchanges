@@ -21,6 +21,14 @@ Or run locally:
 BINDIR=~/.local/bin ./install.sh v0.2.5
 ```
 
+## Usage
+
+```bash
+goodchanges              # run change detection, outputs JSON to stdout
+goodchanges -v           # print version
+goodchanges --version    # print version
+```
+
 ## How it works
 
 1. Finds the merge base commit (comparison point)
