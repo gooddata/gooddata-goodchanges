@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-02-14
+
+### Changed
+- **Breaking:** `changeDirs` entries now use glob patterns instead of directory paths (`"glob"` field replaces `"path"`)
+- Glob matching uses doublestar: `*` matches files in current dir, `**/*` matches all nested files, `**/*.stories.tsx` matches specific patterns
+- Ignores override glob matches: if a file matches a glob but is also in `ignores`, it is excluded
+- Fine-grained changeDirs only match TS/TSX source files
+
 ## [0.8.0] - 2026-02-14
 
 ### Changed
@@ -98,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.9.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.6.0...v0.7.0

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"goodchanges/internal/git"
 	"goodchanges/internal/rush"
 	"goodchanges/internal/tsparse"
@@ -171,6 +173,75 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, 
 			for _, useSpec := range uses {
 				if matchesCSSTaint(useSpec, upstreamTaint) {
 					debugf("  HasTaintedImports: %s matched CSS taint via SCSS @use %s", folder, useSpec)
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// HasTaintedImportsForGlob is like HasTaintedImports but scopes to files matching
+// a glob pattern (relative to projectFolder) instead of a flat directory.
+// Ignores override glob matches.
+func HasTaintedImportsForGlob(projectFolder, globPattern string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.ProjectConfig) bool {
+	if len(upstreamTaint) == 0 {
+		return false
+	}
+	allFiles, err := globSourceFiles(projectFolder)
+	if err != nil {
+		return false
+	}
+	for _, relPath := range allFiles {
+		if matched, _ := doublestar.Match(globPattern, relPath); !matched {
+			continue
+		}
+		if ignoreCfg.IsIgnored(relPath) {
+			continue
+		}
+		fullPath := filepath.Join(projectFolder, relPath)
+		analysis, err := tsparse.ParseFile(fullPath)
+		if err != nil {
+			continue
+		}
+		for _, imp := range analysis.Imports {
+			if strings.HasPrefix(imp.Source, ".") {
+				continue
+			}
+			affectedNames, ok := upstreamTaint[imp.Source]
+			if !ok || len(affectedNames) == 0 {
+				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+					return true
+				}
+				continue
+			}
+			if len(imp.Names) == 0 {
+				return true
+			}
+			for _, name := range imp.Names {
+				if strings.HasPrefix(name, "*:") {
+					return true
+				}
+				if affectedNames[name] {
+					return true
+				}
+			}
+		}
+	}
+
+	if IncludeCSS {
+		scssFiles := globStyleFiles(projectFolder)
+		for _, scssFile := range scssFiles {
+			if matched, _ := doublestar.Match(globPattern, scssFile); !matched {
+				continue
+			}
+			if ignoreCfg.IsIgnored(scssFile) {
+				continue
+			}
+			uses := parseScssUses(filepath.Join(projectFolder, scssFile))
+			for _, useSpec := range uses {
+				if matchesCSSTaint(useSpec, upstreamTaint) {
 					return true
 				}
 			}
@@ -958,55 +1029,56 @@ func parseScssUses(filePath string) []string {
 }
 
 // FindAffectedFiles returns a list of affected source files (relative to projectFolder)
-// within the given directory. A file is affected if it:
+// matching the given glob pattern. A file is affected if it:
 //   - was directly changed
 //   - imports tainted symbols from upstream libraries
 //   - imports from a file that is affected (transitive, BFS)
-func FindAffectedFiles(dir string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string) []string {
-	fullDir := filepath.Join(projectFolder, dir)
-
-	allFiles, err := globSourceFiles(fullDir)
+//
+// Only TS/TSX source files are considered (fine-grained mode).
+// Ignores override glob matches.
+func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig) []string {
+	allFiles, err := globSourceFiles(projectFolder)
 	if err != nil {
 		return nil
 	}
 
-	// Parse all files in the directory
+	// Filter to files matching the glob (and not ignored)
 	type fileInfo struct {
-		relToProject string // relative to projectFolder (e.g. "stories/foo.stories.tsx")
-		relToDir     string // relative to dir (e.g. "foo.stories.tsx")
-		analysis     *tsparse.FileAnalysis
+		rel      string // relative to projectFolder
+		analysis *tsparse.FileAnalysis
 	}
-	fileMap := make(map[string]*fileInfo) // keyed by relToDir
-	for _, relToDir := range allFiles {
-		relToProject := filepath.Join(dir, relToDir)
-		fullPath := filepath.Join(fullDir, relToDir)
+	fileMap := make(map[string]*fileInfo) // keyed by rel
+	for _, rel := range allFiles {
+		if matched, _ := doublestar.Match(globPattern, rel); !matched {
+			continue
+		}
+		if ignoreCfg.IsIgnored(rel) {
+			continue
+		}
+		fullPath := filepath.Join(projectFolder, rel)
 		analysis, err := tsparse.ParseFile(fullPath)
 		if err != nil {
 			continue
 		}
-		fileMap[relToDir] = &fileInfo{
-			relToProject: relToProject,
-			relToDir:     relToDir,
-			analysis:     analysis,
-		}
+		fileMap[rel] = &fileInfo{rel: rel, analysis: analysis}
 	}
 
 	affected := make(map[string]bool)
 
 	// Seed from directly changed files
 	for _, f := range changedFiles {
-		if !strings.HasPrefix(f, fullDir+"/") {
+		if !strings.HasPrefix(f, projectFolder+"/") {
 			continue
 		}
-		rel, _ := filepath.Rel(fullDir, f)
+		rel, _ := filepath.Rel(projectFolder, f)
 		if _, ok := fileMap[rel]; ok {
 			affected[rel] = true
 		}
 	}
 
 	// Seed from files importing tainted upstream symbols
-	for relToDir, fi := range fileMap {
-		if affected[relToDir] {
+	for rel, fi := range fileMap {
+		if affected[rel] {
 			continue
 		}
 		for _, imp := range fi.analysis.Imports {
@@ -1016,22 +1088,22 @@ func FindAffectedFiles(dir string, upstreamTaint map[string]map[string]bool, cha
 			affectedNames, ok := upstreamTaint[imp.Source]
 			if !ok || len(affectedNames) == 0 {
 				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
-					affected[relToDir] = true
+					affected[rel] = true
 					break
 				}
 				continue
 			}
 			if len(imp.Names) == 0 {
-				affected[relToDir] = true
+				affected[rel] = true
 				break
 			}
 			for _, name := range imp.Names {
 				if strings.HasPrefix(name, "*:") || affectedNames[name] {
-					affected[relToDir] = true
+					affected[rel] = true
 					break
 				}
 			}
-			if affected[relToDir] {
+			if affected[rel] {
 				break
 			}
 		}
@@ -1041,23 +1113,21 @@ func FindAffectedFiles(dir string, upstreamTaint map[string]map[string]bool, cha
 		return nil
 	}
 
-	// Build local import graph: importer -> [imported files]
-	// and reverse: imported file -> [importers]
+	// Build local import graph (reverse: imported file -> importers)
 	reverseImports := make(map[string][]string)
-	for relToDir, fi := range fileMap {
-		fileDir := filepath.Dir(filepath.Join(fullDir, relToDir))
+	for rel, fi := range fileMap {
+		fileDir := filepath.Dir(rel)
 		for _, imp := range fi.analysis.Imports {
 			if !strings.HasPrefix(imp.Source, ".") {
 				continue
 			}
-			resolved := resolveImportSource(fileDir, imp.Source, fullDir)
+			resolved := resolveImportSource(fileDir, imp.Source, projectFolder)
 			if resolved == "" {
 				continue
 			}
-			// resolved is relative to fullDir; find matching file
 			for candidate := range fileMap {
 				if stripTSExtension(candidate) == resolved {
-					reverseImports[candidate] = append(reverseImports[candidate], relToDir)
+					reverseImports[candidate] = append(reverseImports[candidate], rel)
 					break
 				}
 			}
@@ -1080,13 +1150,9 @@ func FindAffectedFiles(dir string, upstreamTaint map[string]map[string]bool, cha
 		}
 	}
 
-	// Collect results relative to projectFolder
 	var result []string
-	for relToDir := range affected {
-		fi := fileMap[relToDir]
-		if fi != nil {
-			result = append(result, fi.relToProject)
-		}
+	for rel := range affected {
+		result = append(result, rel)
 	}
 	sort.Strings(result)
 	return result

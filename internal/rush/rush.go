@@ -108,7 +108,7 @@ func BuildProjectMap(config *Config) map[string]*ProjectInfo {
 }
 
 type ChangeDir struct {
-	Path string  `json:"path"`
+	Glob string  `json:"glob"`
 	Type *string `json:"type,omitempty"` // nil = normal, "fine-grained"
 }
 
