@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-02-14
+
+### Changed
+- Fine-grained detection now uses symbol-level taint propagation matching library analysis: AST diffs identify changed symbols, import graph tracks name mappings, BFS only propagates to importers of actually changed symbols, with intra-file and re-export handling
+
 ## [0.11.0] - 2026-02-14
 
 ### Added
@@ -141,6 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.11.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.5...v0.10.0
 [0.9.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.4...v0.9.5
