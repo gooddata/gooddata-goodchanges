@@ -363,7 +363,7 @@ func main() {
 
 			for _, cd := range cfg.ChangeDirs {
 				if cd.IsFineGrained() {
-					detected := analyzer.FindAffectedFiles(cd.Glob, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg)
+					detected := analyzer.FindAffectedFiles(cd.Glob, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg, depChangedDeps[rp.ProjectFolder])
 					if len(detected) > 0 {
 						fineGrainedDetections = append(fineGrainedDetections, detected...)
 					}
