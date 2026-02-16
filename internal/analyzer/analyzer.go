@@ -1085,7 +1085,8 @@ func parseScssUses(filePath string) []string {
 //
 // Only TS/TSX source files are considered (fine-grained mode).
 // Ignores override glob matches.
-func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig, taintedExternalDeps map[string]bool, mergeBase string, includeTypes bool) []string {
+// If filterPattern is non-empty, only affected files matching it are returned.
+func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig, taintedExternalDeps map[string]bool, mergeBase string, includeTypes bool) []string {
 	allFiles, err := globSourceFiles(projectFolder)
 	if err != nil {
 		return nil
@@ -1261,6 +1262,11 @@ func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]b
 
 	var result []string
 	for rel := range affected {
+		if filterPattern != "" {
+			if matched, _ := doublestar.Match(filterPattern, rel); !matched {
+				continue
+			}
+		}
 		result = append(result, rel)
 	}
 	sort.Strings(result)

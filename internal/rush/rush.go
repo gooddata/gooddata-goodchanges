@@ -108,8 +108,9 @@ func BuildProjectMap(config *Config) map[string]*ProjectInfo {
 }
 
 type ChangeDir struct {
-	Glob string  `json:"glob"`
-	Type *string `json:"type,omitempty"` // nil = normal, "fine-grained"
+	Glob   string  `json:"glob"`
+	Filter *string `json:"filter,omitempty"` // optional output filter glob (fine-grained only)
+	Type   *string `json:"type,omitempty"`   // nil = normal, "fine-grained"
 }
 
 // IsFineGrained returns true if this changeDir is configured for fine-grained detection.

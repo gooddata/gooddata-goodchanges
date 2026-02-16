@@ -113,6 +113,7 @@ An aggregated target that uses glob patterns to match files across a project. Do
 Each `changeDirs` entry is an object with:
 
 - `glob` -- glob pattern to match files (relative to project root). Uses doublestar syntax: `*` matches files in current directory only, `**/*` matches all nested files, `**/*.stories.tsx` matches specific patterns recursively.
+- `filter` -- optional output filter glob (fine-grained only). When set, the `glob` defines the analysis scope and `filter` narrows which affected files appear in the output. Example: `{"glob": "src/**/*", "filter": "src/**/*.test.ts", "type": "fine-grained"}` analyzes all files in `src/` but only returns affected test files.
 - `type` -- optional, set to `"fine-grained"` for granular file-level detection
 
 **Ignores override globs:** if a file matches a `changeDirs` glob but also matches an `ignores` pattern, the file is excluded.
@@ -130,13 +131,13 @@ Each `changeDirs` entry is an object with:
 
 ### Fields reference
 
-| Field        | Type                             | Used by        | Description                                                                          |
-|--------------|----------------------------------|----------------|--------------------------------------------------------------------------------------|
-| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this project is                                         |
-| `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                         |
-| `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                             |
-| `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "type?": "fine-grained"}` |
-| `ignores`    | `string[]`                       | Both           | Glob patterns for files to exclude from change detection                             |
+| Field        | Type                             | Used by        | Description                                                                                            |
+|--------------|----------------------------------|----------------|--------------------------------------------------------------------------------------------------------|
+| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this project is                                                           |
+| `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                                           |
+| `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                                               |
+| `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
+| `ignores`    | `string[]`                       | Both           | Glob patterns for files to exclude from change detection                                               |
 
 The `.goodchangesrc.json` file itself is always ignored.
 
