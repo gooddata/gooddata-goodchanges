@@ -60,6 +60,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		if !existedBefore {
 			// New symbol — it's affected
 			if sym.IsTypeOnly && !includeTypes {
+				debugf("    %s: NEW type-only symbol (skipped, includeTypes=false)", sym.Name)
 				continue
 			}
 			debugf("    %s: NEW symbol", sym.Name)
@@ -102,6 +103,19 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		// Runtime change
 		debugf("    %s: RUNTIME change", sym.Name)
 		affected = append(affected, sym.Name)
+	}
+
+	// Log deleted symbols (in old but not in new)
+	if oldAnalysis != nil {
+		newSymbolNames := make(map[string]bool)
+		for _, sym := range newAnalysis.Symbols {
+			newSymbolNames[sym.Name] = true
+		}
+		for _, sym := range oldAnalysis.Symbols {
+			if !newSymbolNames[sym.Name] {
+				debugf("    %s: DELETED symbol", sym.Name)
+			}
+		}
 	}
 
 	// Intra-file propagation: if symbol A changed and symbol B references A,
