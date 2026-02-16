@@ -1323,20 +1323,24 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		}
 		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, analysis, oldContent, includeTypes)
 		debugf("  %s: affected symbols (AST diff): %v", stem, changedSymbols)
-		if len(changedSymbols) > 0 || oldAnalysis == nil {
-			if tainted[stem] == nil {
-				tainted[stem] = make(map[string]bool)
+		if tainted[stem] == nil {
+			tainted[stem] = make(map[string]bool)
+		}
+		if oldAnalysis == nil {
+			// New file: taint all symbols
+			debugf("  %s: new file — tainting all symbols", stem)
+			for _, sym := range analysis.Symbols {
+				tainted[stem][sym.Name] = true
 			}
+			tainted[stem]["*"] = true
+		} else if len(changedSymbols) > 0 {
 			for _, s := range changedSymbols {
 				tainted[stem][s] = true
 			}
-			// New file: taint all symbols
-			if oldAnalysis == nil {
-				debugf("  %s: new file — tainting all symbols", stem)
-				for _, sym := range analysis.Symbols {
-					tainted[stem][sym.Name] = true
-				}
-			}
+		} else {
+			// File changed but no symbol-level diff detected (e.g. changes in
+			// test()/describe() blocks or other non-declaration code).
+			tainted[stem]["*"] = true
 		}
 	}
 
@@ -1695,6 +1699,38 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			}
 			if addedNew {
 				queue = append(queue, importerStem)
+			}
+		}
+	}
+
+	// Mark leaf files (no tainted symbols yet) that import from tainted files.
+	// Covers spec/test files that use imports in test()/describe() blocks
+	// without declaring top-level symbols the usage checker can find.
+	for stem := range fileAnalyses {
+		if tainted[stem] != nil {
+			continue
+		}
+		for _, edge := range localImportGraph[stem] {
+			src := tainted[edge.fromStem]
+			if src == nil {
+				continue
+			}
+			if edge.isSideEffect {
+				tainted[stem] = map[string]bool{"*": true}
+				break
+			}
+			for _, origName := range edge.origNames {
+				if origName == "*" && len(src) > 0 {
+					tainted[stem] = map[string]bool{"*": true}
+					break
+				}
+				if src[origName] || src["*"] {
+					tainted[stem] = map[string]bool{"*": true}
+					break
+				}
+			}
+			if tainted[stem] != nil {
+				break
 			}
 		}
 	}
