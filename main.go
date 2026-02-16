@@ -313,6 +313,9 @@ func main() {
 		}
 
 		for _, td := range cfg.Targets {
+			// Merge global + per-target ignores for this target's detection
+			targetCfg := cfg.WithTargetIgnores(td)
+
 			if td.IsTarget() {
 				if len(targetPatterns) > 0 && !matchesTargetFilter(rp.PackageName, targetPatterns) {
 					continue
@@ -332,7 +335,7 @@ func main() {
 				for _, f := range changedFiles {
 					if strings.HasPrefix(f, rp.ProjectFolder+"/") {
 						relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
-						if !cfg.IsIgnored(relPath) {
+						if !targetCfg.IsIgnored(relPath) {
 							triggered = true
 							break
 						}
@@ -350,7 +353,7 @@ func main() {
 				}
 
 				// Condition 3: Tainted workspace imports
-				if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, cfg) {
+				if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, targetCfg) {
 					changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
 					continue
 				}
@@ -388,7 +391,7 @@ func main() {
 						if cd.Filter != nil {
 							filterPattern = *cd.Filter
 						}
-						detected := analyzer.FindAffectedFiles(cd.Glob, filterPattern, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg, depChangedDeps[rp.ProjectFolder], mergeBase, flagIncludeTypes)
+						detected := analyzer.FindAffectedFiles(cd.Glob, filterPattern, allUpstreamTaint, changedFiles, rp.ProjectFolder, targetCfg, depChangedDeps[rp.ProjectFolder], mergeBase, flagIncludeTypes)
 						if len(detected) > 0 {
 							fineGrainedDetections = append(fineGrainedDetections, detected...)
 						}
@@ -399,7 +402,7 @@ func main() {
 								continue
 							}
 							relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
-							if cfg.IsIgnored(relPath) {
+							if targetCfg.IsIgnored(relPath) {
 								continue
 							}
 							if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
@@ -408,7 +411,7 @@ func main() {
 							}
 						}
 						if !normalTriggered {
-							if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, cfg) {
+							if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, targetCfg) {
 								normalTriggered = true
 							}
 						}

@@ -123,6 +123,7 @@ type TargetDef struct {
 	App        *string     `json:"app,omitempty"`        // rush project name of corresponding app
 	TargetName *string     `json:"targetName,omitempty"` // output name for virtual targets
 	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // globs to watch for virtual targets
+	Ignores    []string    `json:"ignores,omitempty"`    // per-target ignore globs (additive with global)
 }
 
 // IsTarget returns true if this target definition is a regular target.
@@ -181,7 +182,20 @@ func (pc *ProjectConfig) IsIgnored(relPath string) bool {
 	return false
 }
 
-
+// WithTargetIgnores returns a new ProjectConfig with the target's ignores merged in.
+// The returned config's IsIgnored checks both global and per-target patterns.
+func (pc *ProjectConfig) WithTargetIgnores(td TargetDef) *ProjectConfig {
+	if len(td.Ignores) == 0 {
+		return pc
+	}
+	merged := &ProjectConfig{
+		Targets: pc.Targets,
+		Ignores: make([]string, 0, len(pc.Ignores)+len(td.Ignores)),
+	}
+	merged.Ignores = append(merged.Ignores, pc.Ignores...)
+	merged.Ignores = append(merged.Ignores, td.Ignores...)
+	return merged
+}
 
 // FindChangedProjects determines which projects have files in the changed file list.
 // Files matching ignore globs in .goodchangesrc.json are excluded.
