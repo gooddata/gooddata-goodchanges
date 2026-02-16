@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-02-14
+
+### Changed
+- **Breaking:** `.goodchangesrc.json` now uses a `targets` array instead of a single top-level target definition. Each entry in `targets` is a target object with `type`, `app`, `targetName`, and `changeDirs`. The `ignores` field remains at the top level (shared across all targets).
+
 ## [0.11.2] - 2026-02-14
 
 ### Fixed
@@ -151,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.12.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.10.0...v0.11.0
