@@ -4,10 +4,12 @@ go 1.26.0
 
 replace goodchanges/tsgo-vendor => ./_vendor/typescript-go
 
-require goodchanges/tsgo-vendor v0.0.0-00010101000000-000000000000
+require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
+	goodchanges/tsgo-vendor v0.0.0-00010101000000-000000000000
+)
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
