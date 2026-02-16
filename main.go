@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +18,9 @@ import (
 	"goodchanges/internal/lockfile"
 	"goodchanges/internal/rush"
 )
+
+//go:embed VERSION
+var version string
 
 var flagIncludeTypes bool
 var flagIncludeCSS bool
@@ -36,6 +40,14 @@ func logf(format string, args ...interface{}) {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "-v" || arg == "--version" {
+			fmt.Print(strings.TrimSpace(version))
+			fmt.Println()
+			os.Exit(0)
+		}
+	}
+
 	flagIncludeTypes = envBool("INCLUDE_TYPES")
 	flagIncludeCSS = envBool("INCLUDE_CSS")
 
