@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-02-14
+
+### Added
+- JSON import taint propagation: changed `.json` files now taint TS/JS files that import them, with symbol-level granularity based on usage of the imported binding
+
 ## [0.13.0] - 2026-02-14
 
 ### Added
@@ -161,6 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.14.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.11.1...v0.11.2
