@@ -1180,7 +1180,7 @@ func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]b
 		return nil
 	}
 
-	// Build local import graph (reverse: imported file -> importers)
+	// Build local import graph (reverse: imported file -> importers/re-exporters)
 	reverseImports := make(map[string][]string)
 	for rel, fi := range fileMap {
 		fileDir := filepath.Dir(rel)
@@ -1190,6 +1190,34 @@ func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]b
 			}
 			resolved := resolveImportSource(fileDir, imp.Source, projectFolder)
 			if resolved == "" {
+				continue
+			}
+			for candidate := range fileMap {
+				if stripTSExtension(candidate) == resolved {
+					reverseImports[candidate] = append(reverseImports[candidate], rel)
+					break
+				}
+			}
+		}
+		// Also follow re-exports (export { X } from "./foo" / export * from "./foo")
+		// so barrel files don't break the propagation chain.
+		for _, exp := range fi.analysis.Exports {
+			if exp.Source == "" || !strings.HasPrefix(exp.Source, ".") {
+				continue
+			}
+			resolved := resolveImportSource(fileDir, exp.Source, projectFolder)
+			if resolved == "" {
+				continue
+			}
+			// Avoid duplicate edge if already added via imports
+			alreadyHasEdge := false
+			for _, existing := range reverseImports[resolved] {
+				if existing == rel {
+					alreadyHasEdge = true
+					break
+				}
+			}
+			if alreadyHasEdge {
 				continue
 			}
 			for candidate := range fileMap {
