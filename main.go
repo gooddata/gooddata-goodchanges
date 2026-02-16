@@ -102,10 +102,15 @@ func main() {
 		var targetSeeds []string
 		for _, rp := range rushConfig.Projects {
 			cfg := configMap[rp.ProjectFolder]
-			if cfg.IsTarget() && matchesTargetFilter(rp.PackageName, targetPatterns) {
-				targetSeeds = append(targetSeeds, rp.PackageName)
-			} else if cfg.IsVirtualTarget() && cfg.TargetName != nil && matchesTargetFilter(*cfg.TargetName, targetPatterns) {
-				targetSeeds = append(targetSeeds, rp.PackageName)
+			if cfg == nil {
+				continue
+			}
+			for _, td := range cfg.Targets {
+				if td.IsTarget() && matchesTargetFilter(rp.PackageName, targetPatterns) {
+					targetSeeds = append(targetSeeds, rp.PackageName)
+				} else if td.IsVirtualTarget() && td.TargetName != nil && matchesTargetFilter(*td.TargetName, targetPatterns) {
+					targetSeeds = append(targetSeeds, rp.PackageName)
+				}
 			}
 		}
 		relevantPackages = rush.FindTransitiveDependencies(projectMap, targetSeeds)
@@ -303,119 +308,124 @@ func main() {
 
 	for _, rp := range rushConfig.Projects {
 		cfg := configMap[rp.ProjectFolder]
+		if cfg == nil {
+			continue
+		}
 
-		if cfg.IsTarget() {
-			if len(targetPatterns) > 0 && !matchesTargetFilter(rp.PackageName, targetPatterns) {
-				continue
-			}
-			// Target detection with 4 conditions:
-			//   1. Direct file changes (outside ignores)
-			//   2. External dep changes in lockfile
-			//   3. Tainted workspace imports
-			//   4. Corresponding app is tainted
-			info := projectMap[rp.PackageName]
-			if info == nil {
-				continue
-			}
-
-			// Condition 1: Direct file changes
-			triggered := false
-			for _, f := range changedFiles {
-				if strings.HasPrefix(f, rp.ProjectFolder+"/") {
-					relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
-					if !cfg.IsIgnored(relPath) {
-						triggered = true
-						break
-					}
+		for _, td := range cfg.Targets {
+			if td.IsTarget() {
+				if len(targetPatterns) > 0 && !matchesTargetFilter(rp.PackageName, targetPatterns) {
+					continue
 				}
-			}
-			if triggered {
-				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-				continue
-			}
-
-			// Condition 2: External dep changes in lockfile
-			if len(depChangedDeps[rp.ProjectFolder]) > 0 {
-				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-				continue
-			}
-
-			// Condition 3: Tainted workspace imports
-			if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, cfg) {
-				changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-				continue
-			}
-
-			// Condition 4: Corresponding app is tainted
-			if cfg.App != nil {
-				appInfo := projectMap[*cfg.App]
-				if appInfo != nil {
-					if changedProjects[*cfg.App] != nil {
-						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-						continue
-					}
-					if len(depChangedDeps[appInfo.ProjectFolder]) > 0 {
-						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-						continue
-					}
-					if analyzer.HasTaintedImports(appInfo.ProjectFolder, allUpstreamTaint, nil) {
-						changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
-						continue
-					}
+				// Target detection with 4 conditions:
+				//   1. Direct file changes (outside ignores)
+				//   2. External dep changes in lockfile
+				//   3. Tainted workspace imports
+				//   4. Corresponding app is tainted
+				info := projectMap[rp.PackageName]
+				if info == nil {
+					continue
 				}
-			}
-		} else if cfg.IsVirtualTarget() && cfg.TargetName != nil {
-			if len(targetPatterns) > 0 && !matchesTargetFilter(*cfg.TargetName, targetPatterns) {
-				continue
-			}
-			// Virtual target: check changeDirs globs for file changes or tainted imports.
-			// Normal globs trigger a full run; fine-grained globs collect specific affected files.
-			normalTriggered := false
-			var fineGrainedDetections []string
 
-			for _, cd := range cfg.ChangeDirs {
-				if cd.IsFineGrained() {
-					filterPattern := ""
-					if cd.Filter != nil {
-						filterPattern = *cd.Filter
-					}
-					detected := analyzer.FindAffectedFiles(cd.Glob, filterPattern, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg, depChangedDeps[rp.ProjectFolder], mergeBase, flagIncludeTypes)
-					if len(detected) > 0 {
-						fineGrainedDetections = append(fineGrainedDetections, detected...)
-					}
-				} else {
-					// Normal: check for any changed file matching the glob
-					for _, f := range changedFiles {
-						if !strings.HasPrefix(f, rp.ProjectFolder+"/") {
-							continue
-						}
+				// Condition 1: Direct file changes
+				triggered := false
+				for _, f := range changedFiles {
+					if strings.HasPrefix(f, rp.ProjectFolder+"/") {
 						relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
-						if cfg.IsIgnored(relPath) {
-							continue
-						}
-						if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
-							normalTriggered = true
+						if !cfg.IsIgnored(relPath) {
+							triggered = true
 							break
 						}
 					}
-					if !normalTriggered {
-						if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, cfg) {
-							normalTriggered = true
+				}
+				if triggered {
+					changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+					continue
+				}
+
+				// Condition 2: External dep changes in lockfile
+				if len(depChangedDeps[rp.ProjectFolder]) > 0 {
+					changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+					continue
+				}
+
+				// Condition 3: Tainted workspace imports
+				if analyzer.HasTaintedImports(rp.ProjectFolder, allUpstreamTaint, cfg) {
+					changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+					continue
+				}
+
+				// Condition 4: Corresponding app is tainted
+				if td.App != nil {
+					appInfo := projectMap[*td.App]
+					if appInfo != nil {
+						if changedProjects[*td.App] != nil {
+							changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+							continue
+						}
+						if len(depChangedDeps[appInfo.ProjectFolder]) > 0 {
+							changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+							continue
+						}
+						if analyzer.HasTaintedImports(appInfo.ProjectFolder, allUpstreamTaint, nil) {
+							changedE2E[rp.PackageName] = &TargetResult{Name: rp.PackageName}
+							continue
 						}
 					}
 				}
-				if normalTriggered {
-					break
+			} else if td.IsVirtualTarget() && td.TargetName != nil {
+				if len(targetPatterns) > 0 && !matchesTargetFilter(*td.TargetName, targetPatterns) {
+					continue
 				}
-			}
+				// Virtual target: check changeDirs globs for file changes or tainted imports.
+				// Normal globs trigger a full run; fine-grained globs collect specific affected files.
+				normalTriggered := false
+				var fineGrainedDetections []string
 
-			if normalTriggered {
-				changedE2E[*cfg.TargetName] = &TargetResult{Name: *cfg.TargetName}
-			} else if len(fineGrainedDetections) > 0 {
-				sort.Strings(fineGrainedDetections)
-				changedE2E[*cfg.TargetName] = &TargetResult{
-					Name:       *cfg.TargetName,
-					Detections: fineGrainedDetections,
+				for _, cd := range td.ChangeDirs {
+					if cd.IsFineGrained() {
+						filterPattern := ""
+						if cd.Filter != nil {
+							filterPattern = *cd.Filter
+						}
+						detected := analyzer.FindAffectedFiles(cd.Glob, filterPattern, allUpstreamTaint, changedFiles, rp.ProjectFolder, cfg, depChangedDeps[rp.ProjectFolder], mergeBase, flagIncludeTypes)
+						if len(detected) > 0 {
+							fineGrainedDetections = append(fineGrainedDetections, detected...)
+						}
+					} else {
+						// Normal: check for any changed file matching the glob
+						for _, f := range changedFiles {
+							if !strings.HasPrefix(f, rp.ProjectFolder+"/") {
+								continue
+							}
+							relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
+							if cfg.IsIgnored(relPath) {
+								continue
+							}
+							if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
+								normalTriggered = true
+								break
+							}
+						}
+						if !normalTriggered {
+							if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, cfg) {
+								normalTriggered = true
+							}
+						}
+					}
+					if normalTriggered {
+						break
+					}
+				}
+
+				if normalTriggered {
+					changedE2E[*td.TargetName] = &TargetResult{Name: *td.TargetName}
+				} else if len(fineGrainedDetections) > 0 {
+					sort.Strings(fineGrainedDetections)
+					changedE2E[*td.TargetName] = &TargetResult{
+						Name:       *td.TargetName,
+						Detections: fineGrainedDetections,
+					}
 				}
 			}
 		}

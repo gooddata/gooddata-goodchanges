@@ -80,19 +80,33 @@ Everything else is an **app** (bundled). Apps are not analyzed for granular expo
 
 ## Configuration
 
-Each project can optionally have a `.goodchangesrc.json` file in its root directory.
+Each project can optionally have a `.goodchangesrc.json` file in its root directory. A single config file can define multiple targets via the `targets` array.
+
+```json
+{
+  "targets": [
+    {
+      "type": "target",
+      "app": "@gooddata/gdc-dashboards"
+    },
+    {
+      "type": "virtual-target",
+      "targetName": "neobackstop",
+      "changeDirs": [
+        { "glob": "src/**/*" },
+        { "glob": "scenarios/**/*" },
+        { "glob": "stories/**/*.stories.tsx", "type": "fine-grained" },
+        { "glob": "neobackstop/**/*" }
+      ]
+    }
+  ],
+  "ignores": ["scenarios/**/*.md"]
+}
+```
 
 ### Target
 
 Marks a project as an e2e test package. The package name is included in the output when any of the 4 trigger conditions are met.
-
-```json
-{
-  "type": "target",
-  "app": "@gooddata/gdc-dashboards",
-  "ignores": ["scenarios/**/*.md"]
-}
-```
 
 **Trigger conditions:**
 
@@ -104,19 +118,6 @@ Marks a project as an e2e test package. The package name is included in the outp
 ### Virtual target
 
 An aggregated target that uses glob patterns to match files across a project. Does not correspond to a real package name in the output -- uses `targetName` instead.
-
-```json
-{
-  "type": "virtual-target",
-  "targetName": "neobackstop",
-  "changeDirs": [
-    { "glob": "src/**/*" },
-    { "glob": "scenarios/**/*" },
-    { "glob": "stories/**/*.stories.tsx", "type": "fine-grained" },
-    { "glob": "neobackstop/**/*" }
-  ]
-}
-```
 
 Each `changeDirs` entry is an object with:
 
@@ -139,13 +140,21 @@ Each `changeDirs` entry is an object with:
 
 ### Fields reference
 
+**Top-level fields:**
+
+| Field     | Type          | Description                                                |
+|-----------|---------------|------------------------------------------------------------|
+| `targets` | `TargetDef[]` | Array of target definitions (see below)                    |
+| `ignores` | `string[]`    | Glob patterns for files to exclude from change detection   |
+
+**TargetDef fields (each entry in `targets`):**
+
 | Field        | Type                             | Used by        | Description                                                                                            |
 |--------------|----------------------------------|----------------|--------------------------------------------------------------------------------------------------------|
-| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this project is                                                           |
+| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this is                                                                   |
 | `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                                           |
 | `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                                               |
 | `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
-| `ignores`    | `string[]`                       | Both           | Glob patterns for files to exclude from change detection                                               |
 
 The `.goodchangesrc.json` file itself is always ignored.
 

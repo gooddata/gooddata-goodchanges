@@ -118,12 +118,26 @@ func (cd ChangeDir) IsFineGrained() bool {
 	return cd.Type != nil && *cd.Type == "fine-grained"
 }
 
-type ProjectConfig struct {
-	Type       *string     `json:"type,omitempty"`       // "target", "virtual-target"
+type TargetDef struct {
+	Type       string      `json:"type"`                 // "target", "virtual-target"
 	App        *string     `json:"app,omitempty"`        // rush project name of corresponding app
 	TargetName *string     `json:"targetName,omitempty"` // output name for virtual targets
-	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // dirs to watch for virtual targets
-	Ignores    []string    `json:"ignores,omitempty"`
+	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // globs to watch for virtual targets
+}
+
+// IsTarget returns true if this target definition is a regular target.
+func (td TargetDef) IsTarget() bool {
+	return td.Type == "target"
+}
+
+// IsVirtualTarget returns true if this target definition is a virtual target.
+func (td TargetDef) IsVirtualTarget() bool {
+	return td.Type == "virtual-target"
+}
+
+type ProjectConfig struct {
+	Targets []TargetDef `json:"targets,omitempty"`
+	Ignores []string    `json:"ignores,omitempty"`
 }
 
 // LoadProjectConfig reads .goodchangesrc.json from the project folder.
@@ -167,15 +181,7 @@ func (pc *ProjectConfig) IsIgnored(relPath string) bool {
 	return false
 }
 
-// IsTarget returns true if this project is configured as a target (e2e test package).
-func (pc *ProjectConfig) IsTarget() bool {
-	return pc != nil && pc.Type != nil && *pc.Type == "target"
-}
 
-// IsVirtualTarget returns true if this project is configured as a virtual target.
-func (pc *ProjectConfig) IsVirtualTarget() bool {
-	return pc != nil && pc.Type != nil && *pc.Type == "virtual-target"
-}
 
 // FindChangedProjects determines which projects have files in the changed file list.
 // Files matching ignore globs in .goodchangesrc.json are excluded.
