@@ -155,6 +155,7 @@ Each `changeDirs` entry is an object with:
 | `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                                           |
 | `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                                               |
 | `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
+| `ignores`    | `string[]`                       | Both           | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection |
 
 The `.goodchangesrc.json` file itself is always ignored.
 
