@@ -282,6 +282,13 @@ func isStyleImport(source string) bool {
 	return false
 }
 
+// isCSSModule returns true if the import source looks like a CSS module file
+// (e.g. "./Component.module.scss", "./styles.module.css").
+func isCSSModule(source string) bool {
+	lower := strings.ToLower(source)
+	return strings.HasSuffix(lower, ".module.scss") || strings.HasSuffix(lower, ".module.css")
+}
+
 type importEdge struct {
 	fromStem     string
 	localNames   []string
@@ -451,8 +458,8 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 	}
 
 	// Seed taint from changed CSS/SCSS files within this package.
-	// If a TS file has a relative import to a changed style file (e.g. import "./styles.scss"),
-	// taint all symbols in that TS file (style imports are side-effect imports).
+	// For CSS module imports (*.module.scss/css) with named bindings, only taint symbols
+	// that use the imported binding. For all other style imports, taint all symbols.
 	if len(changedStyleFiles) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
@@ -462,19 +469,28 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				if !isStyleImport(imp.Source) {
 					continue
 				}
-				// Resolve the style import relative to project folder
 				fileDir := filepath.Dir(stem + ".ts")
 				resolved := filepath.Join(fileDir, imp.Source)
 				resolved = filepath.Clean(resolved)
-				if changedStyleFiles[resolved] {
-					if tainted[stem] == nil {
-						tainted[stem] = make(map[string]bool)
+				if !changedStyleFiles[resolved] {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if isCSSModule(imp.Source) && len(imp.Names) > 0 {
+					// CSS module with assigned import: only taint symbols that use the binding
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
 					}
+					debugf("    %s: usage-tainted via CSS module import %s (names: %v)", stem, imp.Source, imp.Names)
+				} else {
+					// Side-effect/unassigned style import: taint all symbols
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
 					debugf("    %s: all symbols tainted via local style import %s", stem, imp.Source)
-					break
 				}
 			}
 		}
