@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-02-14
+
+### Changed
+- Fine-grained changeDirs now AST-diff changed files against the merge base; whitespace-only or comment-only changes no longer cascade through importers
+
 ## [0.9.4] - 2026-02-14
 
 ### Fixed
@@ -126,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.9.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.9.1...v0.9.2

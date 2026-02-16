@@ -1078,14 +1078,14 @@ func parseScssUses(filePath string) []string {
 
 // FindAffectedFiles returns a list of affected source files (relative to projectFolder)
 // matching the given glob pattern. A file is affected if it:
-//   - was directly changed
+//   - was directly changed (AST diff confirms actual symbol changes)
 //   - imports tainted symbols from upstream libraries
 //   - imports from a tainted external dependency (lockfile change)
 //   - imports from a file that is affected (transitive, BFS)
 //
 // Only TS/TSX source files are considered (fine-grained mode).
 // Ignores override glob matches.
-func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig, taintedExternalDeps map[string]bool) []string {
+func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig, taintedExternalDeps map[string]bool, mergeBase string, includeTypes bool) []string {
 	allFiles, err := globSourceFiles(projectFolder)
 	if err != nil {
 		return nil
@@ -1114,13 +1114,27 @@ func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]b
 
 	affected := make(map[string]bool)
 
-	// Seed from directly changed files
+	// Seed from directly changed files (AST diff to filter out no-op changes)
 	for _, f := range changedFiles {
 		if !strings.HasPrefix(f, projectFolder+"/") {
 			continue
 		}
 		rel, _ := filepath.Rel(projectFolder, f)
-		if _, ok := fileMap[rel]; ok {
+		fi, ok := fileMap[rel]
+		if !ok {
+			continue
+		}
+		oldContent, err := git.ShowFile(mergeBase, f)
+		if err != nil {
+			oldContent = ""
+		}
+		var oldAnalysis *tsparse.FileAnalysis
+		if oldContent != "" {
+			oldAnalysis, _ = tsparse.ParseContent(oldContent, f)
+		}
+		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, fi.analysis, oldContent, includeTypes)
+		if len(changedSymbols) > 0 || oldAnalysis == nil {
+			// File has actual symbol changes (or is newly added)
 			affected[rel] = true
 		}
 	}
