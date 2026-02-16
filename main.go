@@ -73,7 +73,8 @@ func main() {
 	}
 
 	projectMap := rush.BuildProjectMap(rushConfig)
-	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles)
+	configMap := rush.LoadAllProjectConfigs(rushConfig)
+	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles, configMap)
 
 	// Detect lockfile dep changes per subspace (folder → set of changed dep names)
 	depChangedDeps := findLockfileAffectedProjects(rushConfig, mergeBase)
@@ -258,7 +259,7 @@ func main() {
 	}
 
 	for _, rp := range rushConfig.Projects {
-		cfg := rush.LoadProjectConfig(rp.ProjectFolder)
+		cfg := configMap[rp.ProjectFolder]
 
 		if cfg.IsTarget() {
 			if len(targetPatterns) > 0 && !matchesTargetFilter(rp.PackageName, targetPatterns) {

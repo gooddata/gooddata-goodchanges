@@ -139,6 +139,16 @@ func LoadProjectConfig(projectFolder string) *ProjectConfig {
 	return &cfg
 }
 
+// LoadAllProjectConfigs reads .goodchangesrc.json for every project in the config.
+// Returns a map keyed by project folder. Entries are nil for projects without a config file.
+func LoadAllProjectConfigs(config *Config) map[string]*ProjectConfig {
+	result := make(map[string]*ProjectConfig, len(config.Projects))
+	for _, rp := range config.Projects {
+		result[rp.ProjectFolder] = LoadProjectConfig(rp.ProjectFolder)
+	}
+	return result
+}
+
 // IsIgnored checks if a file path (relative to project root) matches any ignore glob.
 // The config file itself (.goodchangesrc.json) is always ignored.
 func (pc *ProjectConfig) IsIgnored(relPath string) bool {
@@ -168,7 +178,7 @@ func (pc *ProjectConfig) IsVirtualTarget() bool {
 
 // FindChangedProjects determines which projects have files in the changed file list.
 // Files matching ignore globs in .goodchangesrc.json are excluded.
-func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, changedFiles []string) map[string]*ProjectInfo {
+func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, changedFiles []string, configMap map[string]*ProjectConfig) map[string]*ProjectInfo {
 	result := make(map[string]*ProjectInfo)
 	for _, file := range changedFiles {
 		if file == "" {
@@ -177,7 +187,7 @@ func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, cha
 		for _, rp := range config.Projects {
 			if strings.HasPrefix(file, rp.ProjectFolder+"/") {
 				relPath := strings.TrimPrefix(file, rp.ProjectFolder+"/")
-				cfg := LoadProjectConfig(rp.ProjectFolder)
+				cfg := configMap[rp.ProjectFolder]
 				if cfg.IsIgnored(relPath) {
 					break
 				}
