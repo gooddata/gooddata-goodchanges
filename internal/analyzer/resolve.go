@@ -80,21 +80,26 @@ func resolveToSource(projectFolder string, builtPath string) string {
 		for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
 			tryPath := filepath.Join(projectFolder, base+ext)
 			if _, err := os.Stat(tryPath); err == nil {
+				debugf("  resolveToSource: %s → %s", builtPath, base+ext)
 				return base + ext
 			}
 		}
 		for _, ext := range []string{".ts", ".tsx"} {
 			tryPath := filepath.Join(projectFolder, base, "index"+ext)
 			if _, err := os.Stat(tryPath); err == nil {
-				return filepath.Join(base, "index"+ext)
+				result := filepath.Join(base, "index"+ext)
+				debugf("  resolveToSource: %s → %s", builtPath, result)
+				return result
 			}
 		}
 		tryPath := filepath.Join(projectFolder, candidate)
 		if _, err := os.Stat(tryPath); err == nil {
+			debugf("  resolveToSource: %s → %s (exact)", builtPath, candidate)
 			return candidate
 		}
 	}
 
+	debugf("  resolveToSource: %s → (not found)", builtPath)
 	return ""
 }
 
@@ -117,15 +122,19 @@ func resolveImportToFile(fromDir string, source string, projectFolder string) st
 	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
 		tryPath := filepath.Join(projectFolder, relPath+ext)
 		if _, err := os.Stat(tryPath); err == nil {
+			debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, relPath+ext)
 			return relPath + ext
 		}
 	}
 	for _, ext := range []string{".ts", ".tsx"} {
 		tryPath := filepath.Join(projectFolder, relPath, "index"+ext)
 		if _, err := os.Stat(tryPath); err == nil {
-			return filepath.Join(relPath, "index"+ext)
+			result := filepath.Join(relPath, "index"+ext)
+			debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, result)
+			return result
 		}
 	}
+	debugf("  resolveImportToFile: %s (from %s) → (not found)", source, fromDir)
 	return ""
 }
 

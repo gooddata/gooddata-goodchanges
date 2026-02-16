@@ -55,10 +55,12 @@ func IsLibrary(pkg rush.PackageJSON) bool {
 
 // FindEntrypoints resolves all entrypoints from package.json to source files.
 func FindEntrypoints(projectFolder string, pkg rush.PackageJSON) []Entrypoint {
+	debugf("FindEntrypoints: %s", projectFolder)
 	var entrypoints []Entrypoint
 
 	if pkg.Exports != nil {
 		eps := parseExportsField(pkg.Exports)
+		debugf("  parsed exports field: %d entries", len(eps))
 		for _, ep := range eps {
 			resolved := resolveToSource(projectFolder, ep.SourceFile)
 			if resolved != "" {
@@ -66,6 +68,9 @@ func FindEntrypoints(projectFolder string, pkg rush.PackageJSON) []Entrypoint {
 					ExportPath: ep.ExportPath,
 					SourceFile: resolved,
 				})
+				debugf("  entrypoint: %s → %s", ep.ExportPath, resolved)
+			} else {
+				debugf("  entrypoint: %s → (unresolved from %s)", ep.ExportPath, ep.SourceFile)
 			}
 		}
 	}
@@ -79,12 +84,14 @@ func FindEntrypoints(projectFolder string, pkg rush.PackageJSON) []Entrypoint {
 						ExportPath: ".",
 						SourceFile: resolved,
 					})
+					debugf("  fallback entrypoint: . → %s (from %s)", resolved, field)
 					break
 				}
 			}
 		}
 	}
 
+	debugf("  total entrypoints: %d", len(entrypoints))
 	return entrypoints
 }
 
@@ -93,6 +100,7 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 	fullPath := filepath.Join(projectFolder, ep.SourceFile)
 	analysis, err := tsparse.ParseFile(fullPath)
 	if err != nil {
+		debugf("CollectEntrypointExports: parse error for %s: %v", fullPath, err)
 		return nil
 	}
 	var names []string
@@ -107,6 +115,7 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 			names = append(names, name)
 		}
 	}
+	debugf("CollectEntrypointExports: %s (%s) → %d exports", ep.ExportPath, ep.SourceFile, len(names))
 	return names
 }
 
@@ -115,6 +124,7 @@ func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
 // (e.g. e2e scenario apps) where we don't need to trace to entrypoint exports,
 // just detect whether any tainted dependency is actually imported.
 func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.ProjectConfig) bool {
+	debugf("HasTaintedImports: %s (upstream taint keys: %d)", folder, len(upstreamTaint))
 	if len(upstreamTaint) == 0 {
 		return false
 	}
@@ -148,14 +158,17 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, 
 			}
 			if len(imp.Names) == 0 {
 				// Unassigned import from tainted package
+				debugf("  HasTaintedImports: %s matched via unassigned import of %s in %s", folder, imp.Source, relPath)
 				return true
 			}
 			for _, name := range imp.Names {
 				if strings.HasPrefix(name, "*:") {
 					// Namespace import — any taint means affected
+					debugf("  HasTaintedImports: %s matched via namespace import of %s in %s", folder, imp.Source, relPath)
 					return true
 				}
 				if affectedNames[name] {
+					debugf("  HasTaintedImports: %s matched via %s importing %s from %s", folder, relPath, name, imp.Source)
 					return true
 				}
 			}
@@ -186,6 +199,7 @@ func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, 
 // a glob pattern (relative to projectFolder) instead of a flat directory.
 // Ignores override glob matches.
 func HasTaintedImportsForGlob(projectFolder, globPattern string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.ProjectConfig) bool {
+	debugf("HasTaintedImportsForGlob: %s (glob=%s, upstream taint keys: %d)", projectFolder, globPattern, len(upstreamTaint))
 	if len(upstreamTaint) == 0 {
 		return false
 	}
@@ -212,18 +226,22 @@ func HasTaintedImportsForGlob(projectFolder, globPattern string, upstreamTaint m
 			affectedNames, ok := upstreamTaint[imp.Source]
 			if !ok || len(affectedNames) == 0 {
 				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
+					debugf("  HasTaintedImportsForGlob: matched CSS taint via %s in %s", imp.Source, relPath)
 					return true
 				}
 				continue
 			}
 			if len(imp.Names) == 0 {
+				debugf("  HasTaintedImportsForGlob: matched via unassigned import of %s in %s", imp.Source, relPath)
 				return true
 			}
 			for _, name := range imp.Names {
 				if strings.HasPrefix(name, "*:") {
+					debugf("  HasTaintedImportsForGlob: matched via namespace import of %s in %s", imp.Source, relPath)
 					return true
 				}
 				if affectedNames[name] {
+					debugf("  HasTaintedImportsForGlob: matched via %s importing %s from %s", relPath, name, imp.Source)
 					return true
 				}
 			}
@@ -242,12 +260,14 @@ func HasTaintedImportsForGlob(projectFolder, globPattern string, upstreamTaint m
 			uses := parseScssUses(filepath.Join(projectFolder, scssFile))
 			for _, useSpec := range uses {
 				if matchesCSSTaint(useSpec, upstreamTaint) {
+					debugf("  HasTaintedImportsForGlob: matched CSS taint via SCSS @use %s in %s", useSpec, scssFile)
 					return true
 				}
 			}
 		}
 	}
 
+	debugf("  HasTaintedImportsForGlob: no tainted imports found")
 	return false
 }
 
@@ -1008,10 +1028,12 @@ func FindCSSTaintedPackages(changedFiles []string, rushConfig *rush.Config, proj
 		for _, rp := range rushConfig.Projects {
 			if strings.HasPrefix(f, rp.ProjectFolder+"/") {
 				result[rp.PackageName] = true
+				debugf("FindCSSTaintedPackages: %s tainted via %s", rp.PackageName, f)
 				break
 			}
 		}
 	}
+	debugf("FindCSSTaintedPackages: %d packages tainted", len(result))
 	return result
 }
 
@@ -1139,6 +1161,9 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		return nil
 	}
 
+	debugf("=== FindAffectedFiles for %s (glob=%s filter=%s) ===", projectFolder, globPattern, filterPattern)
+	debugf("  changed files: %d, upstream taint keys: %d, tainted external deps: %d", len(changedFiles), len(upstreamTaint), len(taintedExternalDeps))
+
 	// Filter to files matching the glob (and not ignored), keyed by stem
 	fileAnalyses := make(map[string]*tsparse.FileAnalysis) // keyed by stem
 	stemToRel := make(map[string]string)                   // stem -> original rel path
@@ -1158,6 +1183,8 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		fileAnalyses[stem] = analysis
 		stemToRel[stem] = rel
 	}
+
+	debugf("  files matching glob: %d", len(fileAnalyses))
 
 	// Build import graph (relative imports + re-exports)
 	localImportGraph := make(map[string][]importEdge)
@@ -1229,6 +1256,8 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		}
 	}
 
+	debugf("  import graph edges: %d stems with local imports/re-exports", len(localImportGraph))
+
 	// Build reverse import map for BFS traversal
 	reverseImports := make(map[string][]string)
 	for stem, edges := range localImportGraph {
@@ -1240,6 +1269,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 	// Symbol-level taint map: stem -> set of tainted symbol names
 	tainted := make(map[string]map[string]bool)
 
+	debugf("=== Seeding taint from AST diff (FindAffectedFiles) ===")
 	// Seed from AST diff of directly changed files
 	for _, f := range changedFiles {
 		if !strings.HasPrefix(f, projectFolder+"/") {
@@ -1260,6 +1290,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			oldAnalysis, _ = tsparse.ParseContent(oldContent, f)
 		}
 		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, analysis, oldContent, includeTypes)
+		debugf("  %s: affected symbols (AST diff): %v", stem, changedSymbols)
 		if len(changedSymbols) > 0 || oldAnalysis == nil {
 			if tainted[stem] == nil {
 				tainted[stem] = make(map[string]bool)
@@ -1269,6 +1300,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			}
 			// New file: taint all symbols
 			if oldAnalysis == nil {
+				debugf("  %s: new file — tainting all symbols", stem)
 				for _, sym := range analysis.Symbols {
 					tainted[stem][sym.Name] = true
 				}
@@ -1277,6 +1309,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 	}
 
 	// Seed from upstream workspace taint
+	debugf("=== Seeding taint from upstream workspace (FindAffectedFiles) ===")
 	if len(upstreamTaint) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
@@ -1292,6 +1325,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 						for _, sym := range analysis.Symbols {
 							tainted[stem][sym.Name] = true
 						}
+						debugf("    %s: all symbols tainted via CSS import %s", stem, imp.Source)
 					}
 					continue
 				}
@@ -1303,6 +1337,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
+					debugf("    %s: all symbols tainted via unassigned import from %s", stem, imp.Source)
 					continue
 				}
 				var taintedLocalNames []string
@@ -1322,6 +1357,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 						for _, s := range usageTainted {
 							tainted[stem][s] = true
 						}
+						debugf("    %s: tainted via upstream %s (imports: %v → symbols: %v)", stem, imp.Source, taintedLocalNames, usageTainted)
 					}
 				}
 			}
@@ -1329,6 +1365,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 	}
 
 	// Seed from tainted external dependencies (lockfile changes)
+	debugf("=== Seeding taint from external deps (FindAffectedFiles) ===")
 	if len(taintedExternalDeps) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
@@ -1345,11 +1382,13 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
+					debugf("    %s: all symbols tainted via external dep %s (unassigned import)", stem, imp.Source)
 				} else {
 					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
+					debugf("    %s: tainted via external dep %s (imports: %v → symbols: %v)", stem, imp.Source, imp.Names, usageTainted)
 				}
 			}
 		}
@@ -1369,6 +1408,8 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			changedStyleFiles[relToProject] = true
 		}
 	}
+	debugf("=== Seeding taint from local style files (FindAffectedFiles) ===")
+	debugf("  changed style files: %d", len(changedStyleFiles))
 	if len(changedStyleFiles) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
@@ -1392,10 +1433,12 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
+					debugf("    %s: usage-tainted via CSS module import %s (names: %v)", stem, imp.Source, imp.Names)
 				} else {
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
+					debugf("    %s: all symbols tainted via local style import %s", stem, imp.Source)
 				}
 			}
 		}
@@ -1412,6 +1455,8 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			changedJSONFiles[relToProject] = true
 		}
 	}
+	debugf("=== Seeding taint from local JSON files (FindAffectedFiles) ===")
+	debugf("  changed JSON files: %d", len(changedJSONFiles))
 	if len(changedJSONFiles) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
@@ -1434,20 +1479,29 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
+					debugf("    %s: tainted via JSON import %s (names: %v)", stem, imp.Source, imp.Names)
 				} else {
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
+					debugf("    %s: all symbols tainted via JSON import %s", stem, imp.Source)
 				}
 			}
 		}
 	}
 
+	debugf("=== Initial taint map (FindAffectedFiles) ===")
+	for stem, names := range tainted {
+		debugf("  %s: %v", stem, mapKeys(names))
+	}
+
 	if len(tainted) == 0 {
+		debugf("  (empty — no taint seeded)")
 		return nil
 	}
 
 	// Symbol-level BFS propagation (same engine as AnalyzeLibraryPackage)
+	debugf("=== Starting BFS taint propagation (FindAffectedFiles) ===")
 	queue := make([]string, 0, len(tainted))
 	for stem := range tainted {
 		queue = append(queue, stem)
@@ -1456,6 +1510,8 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		currentStem := queue[0]
 		queue = queue[1:]
 		currentTainted := tainted[currentStem]
+
+		debugf("  BFS visiting: %s (tainted: %v)", currentStem, mapKeys(currentTainted))
 
 		for _, importerStem := range reverseImports[currentStem] {
 			importerAnalysis := fileAnalyses[importerStem]
@@ -1485,8 +1541,11 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			}
 
 			if !hasSideEffectImport && len(taintedLocalNames) == 0 {
+				debugf("    → %s: no tainted imports from %s (skipping)", importerStem, currentStem)
 				continue
 			}
+
+			debugf("    → %s: sideEffect=%v taintedLocalNames=%v", importerStem, hasSideEffectImport, taintedLocalNames)
 
 			var newlyTainted []string
 
@@ -1549,6 +1608,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 								taintedSet[sym.Name] = true
 								newlyTainted = append(newlyTainted, sym.Name)
 								changed = true
+								debugf("    → %s: %s tainted via intra-file dep on %s", importerStem, sym.Name, tName)
 								break
 							}
 						}
@@ -1557,8 +1617,11 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			}
 
 			if len(newlyTainted) == 0 {
+				debugf("    → %s: re-export/usage check found nothing new", importerStem)
 				continue
 			}
+
+			debugf("    → %s: newly tainted symbols: %v", importerStem, newlyTainted)
 
 			if tainted[importerStem] == nil {
 				tainted[importerStem] = make(map[string]bool)
@@ -1576,6 +1639,11 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		}
 	}
 
+	debugf("=== Final taint map (FindAffectedFiles) ===")
+	for stem, names := range tainted {
+		debugf("  %s: %v", stem, mapKeys(names))
+	}
+
 	// Collect affected files (any file with tainted symbols)
 	var result []string
 	for stem := range tainted {
@@ -1588,6 +1656,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		result = append(result, rel)
 	}
 	sort.Strings(result)
+	debugf("  FindAffectedFiles result: %d files", len(result))
 	return result
 }
 
