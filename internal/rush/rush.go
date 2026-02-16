@@ -178,7 +178,8 @@ func (pc *ProjectConfig) IsVirtualTarget() bool {
 
 // FindChangedProjects determines which projects have files in the changed file list.
 // Files matching ignore globs in .goodchangesrc.json are excluded.
-func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, changedFiles []string, configMap map[string]*ProjectConfig) map[string]*ProjectInfo {
+// If relevantPackages is non-nil, only projects in that set are considered.
+func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, changedFiles []string, configMap map[string]*ProjectConfig, relevantPackages map[string]bool) map[string]*ProjectInfo {
 	result := make(map[string]*ProjectInfo)
 	for _, file := range changedFiles {
 		if file == "" {
@@ -186,6 +187,9 @@ func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, cha
 		}
 		for _, rp := range config.Projects {
 			if strings.HasPrefix(file, rp.ProjectFolder+"/") {
+				if relevantPackages != nil && !relevantPackages[rp.PackageName] {
+					break
+				}
 				relPath := strings.TrimPrefix(file, rp.ProjectFolder+"/")
 				cfg := configMap[rp.ProjectFolder]
 				if cfg.IsIgnored(relPath) {
@@ -199,6 +203,32 @@ func FindChangedProjects(config *Config, projectMap map[string]*ProjectInfo, cha
 		}
 	}
 	return result
+}
+
+// FindTransitiveDependencies returns all packages that the seed packages transitively depend on.
+// The seeds themselves are included in the result. Walks DependsOn edges (downward).
+func FindTransitiveDependencies(projectMap map[string]*ProjectInfo, seeds []string) map[string]bool {
+	visited := make(map[string]bool)
+	queue := make([]string, 0, len(seeds))
+	for _, s := range seeds {
+		visited[s] = true
+		queue = append(queue, s)
+	}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		info := projectMap[current]
+		if info == nil {
+			continue
+		}
+		for _, dep := range info.DependsOn {
+			if !visited[dep] {
+				visited[dep] = true
+				queue = append(queue, dep)
+			}
+		}
+	}
+	return visited
 }
 
 // FindTransitiveDependents returns all packages that transitively depend on any of the seed packages.

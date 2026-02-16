@@ -74,7 +74,30 @@ func main() {
 
 	projectMap := rush.BuildProjectMap(rushConfig)
 	configMap := rush.LoadAllProjectConfigs(rushConfig)
-	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles, configMap)
+
+	// Parse TARGETS filter early to skip expensive detection for non-matching targets
+	var targetPatterns []string
+	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
+		targetPatterns = strings.Split(targetsEnv, ",")
+	}
+
+	// When TARGETS is set, compute the relevant package set: active targets + their
+	// transitive dependencies. Only these packages need change detection and analysis.
+	var relevantPackages map[string]bool
+	if len(targetPatterns) > 0 {
+		var targetSeeds []string
+		for _, rp := range rushConfig.Projects {
+			cfg := configMap[rp.ProjectFolder]
+			if cfg.IsTarget() && matchesTargetFilter(rp.PackageName, targetPatterns) {
+				targetSeeds = append(targetSeeds, rp.PackageName)
+			} else if cfg.IsVirtualTarget() && cfg.TargetName != nil && matchesTargetFilter(*cfg.TargetName, targetPatterns) {
+				targetSeeds = append(targetSeeds, rp.PackageName)
+			}
+		}
+		relevantPackages = rush.FindTransitiveDependencies(projectMap, targetSeeds)
+	}
+
+	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles, configMap, relevantPackages)
 
 	// Detect lockfile dep changes per subspace (folder → set of changed dep names)
 	depChangedDeps := findLockfileAffectedProjects(rushConfig, mergeBase)
@@ -83,6 +106,9 @@ func main() {
 	for folder := range depChangedDeps {
 		for _, rp := range rushConfig.Projects {
 			if rp.ProjectFolder == folder {
+				if relevantPackages != nil && !relevantPackages[rp.PackageName] {
+					break
+				}
 				if changedProjects[rp.PackageName] == nil {
 					changedProjects[rp.PackageName] = projectMap[rp.PackageName]
 				}
@@ -97,6 +123,15 @@ func main() {
 		seeds = append(seeds, pkgName)
 	}
 	affectedSet := rush.FindTransitiveDependents(projectMap, seeds)
+
+	// Narrow to relevant packages when TARGETS is set
+	if relevantPackages != nil {
+		for pkg := range affectedSet {
+			if !relevantPackages[pkg] {
+				delete(affectedSet, pkg)
+			}
+		}
+	}
 
 	// Topologically sort: level 0 = lowest-level (no deps on other affected packages)
 	levels := rush.TopologicalSort(projectMap, affectedSet)
@@ -251,12 +286,6 @@ func main() {
 		Detections []string `json:"detections,omitempty"`
 	}
 	changedE2E := make(map[string]*TargetResult)
-
-	// Parse TARGETS filter early to skip expensive detection for non-matching targets
-	var targetPatterns []string
-	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
-		targetPatterns = strings.Split(targetsEnv, ",")
-	}
 
 	for _, rp := range rushConfig.Projects {
 		cfg := configMap[rp.ProjectFolder]
