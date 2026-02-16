@@ -1080,11 +1080,12 @@ func parseScssUses(filePath string) []string {
 // matching the given glob pattern. A file is affected if it:
 //   - was directly changed
 //   - imports tainted symbols from upstream libraries
+//   - imports from a tainted external dependency (lockfile change)
 //   - imports from a file that is affected (transitive, BFS)
 //
 // Only TS/TSX source files are considered (fine-grained mode).
 // Ignores override glob matches.
-func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig) []string {
+func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]bool, changedFiles []string, projectFolder string, ignoreCfg *rush.ProjectConfig, taintedExternalDeps map[string]bool) []string {
 	allFiles, err := globSourceFiles(projectFolder)
 	if err != nil {
 		return nil
@@ -1153,6 +1154,24 @@ func FindAffectedFiles(globPattern string, upstreamTaint map[string]map[string]b
 			}
 			if affected[rel] {
 				break
+			}
+		}
+	}
+
+	// Seed from tainted external dependencies (lockfile changes)
+	if len(taintedExternalDeps) > 0 {
+		for rel, fi := range fileMap {
+			if affected[rel] {
+				continue
+			}
+			for _, imp := range fi.analysis.Imports {
+				if strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if isFromTaintedDep(imp.Source, taintedExternalDeps) {
+					affected[rel] = true
+					break
+				}
 			}
 		}
 	}
