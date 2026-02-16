@@ -1308,6 +1308,52 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		}
 	}
 
+	// Seed from changed CSS/SCSS files within the project.
+	// For CSS module imports (*.module.scss/css) with named bindings, only taint symbols
+	// that use the imported binding. For all other style imports, taint all symbols.
+	changedStyleFiles := make(map[string]bool)
+	for _, f := range changedFiles {
+		if !strings.HasPrefix(f, projectFolder+"/") {
+			continue
+		}
+		relToProject := strings.TrimPrefix(f, projectFolder+"/")
+		ext := strings.ToLower(filepath.Ext(relToProject))
+		if ext == ".scss" || ext == ".css" {
+			changedStyleFiles[relToProject] = true
+		}
+	}
+	if len(changedStyleFiles) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if !strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if !isStyleImport(imp.Source) {
+					continue
+				}
+				fileDir := filepath.Dir(stem + ".ts")
+				resolved := filepath.Join(fileDir, imp.Source)
+				resolved = filepath.Clean(resolved)
+				if !changedStyleFiles[resolved] {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if isCSSModule(imp.Source) && len(imp.Names) > 0 {
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
+				} else {
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+				}
+			}
+		}
+	}
+
 	if len(tainted) == 0 {
 		return nil
 	}
