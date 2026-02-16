@@ -282,6 +282,10 @@ func isStyleImport(source string) bool {
 	return false
 }
 
+func isJSONImport(source string) bool {
+	return strings.HasSuffix(strings.ToLower(source), ".json")
+}
+
 // isCSSModule returns true if the import source looks like a CSS module file
 // (e.g. "./Component.module.scss", "./styles.module.css").
 func isCSSModule(source string) bool {
@@ -491,6 +495,49 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 						tainted[stem][sym.Name] = true
 					}
 					debugf("    %s: all symbols tainted via local style import %s", stem, imp.Source)
+				}
+			}
+		}
+	}
+
+	// Seed taint from changed JSON files within this package.
+	// JSON files are leaf nodes (no imports); if a TS/JS file imports a changed JSON file,
+	// taint the importing file's symbols based on usage of the imported binding.
+	changedJSONFiles := make(map[string]bool)
+	for _, f := range projectChangedFiles {
+		relToProject := strings.TrimPrefix(f, projectFolder+"/")
+		if strings.HasSuffix(strings.ToLower(relToProject), ".json") {
+			changedJSONFiles[relToProject] = true
+		}
+	}
+	if len(changedJSONFiles) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if !strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if !isJSONImport(imp.Source) {
+					continue
+				}
+				fileDir := filepath.Dir(stem + ".ts")
+				resolved := filepath.Clean(filepath.Join(fileDir, imp.Source))
+				if !changedJSONFiles[resolved] {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if len(imp.Names) > 0 {
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
+					debugf("    %s: usage-tainted via JSON import %s (names: %v)", stem, imp.Source, imp.Names)
+				} else {
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+					debugf("    %s: all symbols tainted via JSON import %s", stem, imp.Source)
 				}
 			}
 		}
@@ -1341,6 +1388,48 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					tainted[stem] = make(map[string]bool)
 				}
 				if isCSSModule(imp.Source) && len(imp.Names) > 0 {
+					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					for _, s := range usageTainted {
+						tainted[stem][s] = true
+					}
+				} else {
+					for _, sym := range analysis.Symbols {
+						tainted[stem][sym.Name] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Seed from changed JSON files within the project
+	changedJSONFiles := make(map[string]bool)
+	for _, f := range changedFiles {
+		if !strings.HasPrefix(f, projectFolder+"/") {
+			continue
+		}
+		relToProject := strings.TrimPrefix(f, projectFolder+"/")
+		if strings.HasSuffix(strings.ToLower(relToProject), ".json") {
+			changedJSONFiles[relToProject] = true
+		}
+	}
+	if len(changedJSONFiles) > 0 {
+		for stem, analysis := range fileAnalyses {
+			for _, imp := range analysis.Imports {
+				if !strings.HasPrefix(imp.Source, ".") {
+					continue
+				}
+				if !isJSONImport(imp.Source) {
+					continue
+				}
+				fileDir := filepath.Dir(stem + ".ts")
+				resolved := filepath.Clean(filepath.Join(fileDir, imp.Source))
+				if !changedJSONFiles[resolved] {
+					continue
+				}
+				if tainted[stem] == nil {
+					tainted[stem] = make(map[string]bool)
+				}
+				if len(imp.Names) > 0 {
 					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
