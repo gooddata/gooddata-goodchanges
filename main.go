@@ -27,6 +27,11 @@ var flagIncludeCSS bool
 var flagLog bool
 var flagDebug bool
 
+type TargetResult struct {
+	Name       string   `json:"name"`
+	Detections []string `json:"detections,omitempty"`
+}
+
 // envBool returns true if the environment variable is set to a non-empty value.
 func envBool(key string) bool {
 	return os.Getenv(key) != ""
@@ -119,7 +124,23 @@ func main() {
 	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles, configMap, relevantPackages)
 
 	// Detect lockfile dep changes per subspace (folder → set of changed dep names)
-	depChangedDeps := findLockfileAffectedProjects(rushConfig, mergeBase)
+	depChangedDeps, versionChangedSubspaces := findLockfileAffectedProjects(rushConfig, mergeBase)
+
+	// When lockfileVersion changes in a subspace, treat all projects in that subspace
+	// as having all external deps changed. This feeds into the existing taint propagation:
+	// depChangedDeps → changedProjects → affectedSet → library analysis → target detection.
+	for _, rp := range rushConfig.Projects {
+		subspace := rp.SubspaceName
+		if subspace == "" {
+			subspace = "default"
+		}
+		if versionChangedSubspaces[subspace] {
+			if depChangedDeps[rp.ProjectFolder] == nil {
+				depChangedDeps[rp.ProjectFolder] = make(map[string]bool)
+			}
+			depChangedDeps[rp.ProjectFolder]["*"] = true
+		}
+	}
 
 	// Add dep-affected projects to the changed set (they count as directly changed)
 	for folder := range depChangedDeps {
@@ -163,6 +184,29 @@ func main() {
 
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
+
+	// Seed upstream taint for libraries in version-changed subspaces.
+	// A lockfileVersion change means we can't reliably diff individual deps,
+	// so treat all exports as tainted. This propagates through the analysis loop.
+	for _, rp := range rushConfig.Projects {
+		subspace := rp.SubspaceName
+		if subspace == "" {
+			subspace = "default"
+		}
+		if !versionChangedSubspaces[subspace] {
+			continue
+		}
+		info := projectMap[rp.PackageName]
+		if info == nil {
+			continue
+		}
+		if analyzer.IsLibrary(info.Package) {
+			if allUpstreamTaint[rp.PackageName] == nil {
+				allUpstreamTaint[rp.PackageName] = make(map[string]bool)
+			}
+			allUpstreamTaint[rp.PackageName]["*"] = true
+		}
+	}
 
 	type pkgResult struct {
 		pkgName  string
@@ -300,10 +344,6 @@ func main() {
 	// Load project configs and detect affected targets.
 	// Targets are defined by "type": "target" in .goodchangesrc.json.
 	// Virtual targets are defined by "type": "virtual-target".
-	type TargetResult struct {
-		Name       string   `json:"name"`
-		Detections []string `json:"detections,omitempty"`
-	}
 	changedE2E := make(map[string]*TargetResult)
 
 	for _, rp := range rushConfig.Projects {
@@ -322,7 +362,7 @@ func main() {
 				}
 				// Target detection with 4 conditions:
 				//   1. Direct file changes (outside ignores)
-				//   2. External dep changes in lockfile
+				//   2. External dep changes in lockfile (incl. lockfileVersion wildcard)
 				//   3. Tainted workspace imports
 				//   4. Corresponding app is tainted
 				info := projectMap[rp.PackageName]
@@ -380,6 +420,7 @@ func main() {
 				if len(targetPatterns) > 0 && !matchesTargetFilter(*td.TargetName, targetPatterns) {
 					continue
 				}
+
 				// Virtual target: check changeDirs globs for file changes or tainted imports.
 				// Normal globs trigger a full run; fine-grained globs collect specific affected files.
 				normalTriggered := false
@@ -463,8 +504,10 @@ func main() {
 }
 
 // findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
-// Returns a map of project folder → set of changed external dep package names.
-func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[string]map[string]bool {
+// Returns:
+//   - depChanges: project folder → set of changed external dep package names
+//   - versionChanges: subspace name → true for subspaces where lockfileVersion changed
+func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[string]map[string]bool, map[string]bool) {
 	// Collect subspaces: "default" for projects without subspaceName, plus named ones
 	subspaces := make(map[string]bool)
 	subspaces["default"] = true
@@ -475,11 +518,26 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[str
 	}
 
 	result := make(map[string]map[string]bool)
+	versionChanged := make(map[string]bool)
 	for subspace := range subspaces {
 		lockfilePath := filepath.Join("common", "config", "subspaces", subspace, "pnpm-lock.yaml")
 		if _, err := os.Stat(lockfilePath); err != nil {
 			continue
 		}
+
+		// Compare lockfileVersion between base commit and current
+		newContent, err := os.ReadFile(lockfilePath)
+		if err != nil {
+			continue
+		}
+		oldContent, _ := git.ShowFile(mergeBase, lockfilePath)
+		oldVersion := lockfile.ParseLockfileVersion([]byte(oldContent))
+		newVersion := lockfile.ParseLockfileVersion(newContent)
+		if oldVersion != newVersion {
+			versionChanged[subspace] = true
+			logf("lockfileVersion changed in subspace %q: %q → %q\n", subspace, oldVersion, newVersion)
+		}
+
 		diffText, err := git.DiffSincePath(mergeBase, lockfilePath)
 		if err != nil || diffText == "" {
 			continue
@@ -494,7 +552,7 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) map[str
 			}
 		}
 	}
-	return result
+	return result, versionChanged
 }
 
 // matchesTargetFilter checks if a target name matches any of the given patterns.

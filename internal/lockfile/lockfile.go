@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type depLineInfo struct {
@@ -171,6 +173,28 @@ func countLeadingSpaces(s string) int {
 		}
 	}
 	return len(s)
+}
+
+// ParseLockfileVersion extracts the lockfileVersion value from pnpm-lock.yaml content
+// using proper YAML parsing.
+func ParseLockfileVersion(content []byte) string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return ""
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return ""
+	}
+	mapping := doc.Content[0]
+	if mapping.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i < len(mapping.Content)-1; i += 2 {
+		if mapping.Content[i].Value == "lockfileVersion" {
+			return mapping.Content[i+1].Value
+		}
+	}
+	return ""
 }
 
 // parseDiffChangedLines extracts the new-file line numbers of changed lines from a unified diff.
