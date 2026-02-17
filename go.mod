@@ -7,6 +7,7 @@ replace goodchanges/tsgo-vendor => ./_vendor/typescript-go
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	goodchanges/tsgo-vendor v0.0.0-00010101000000-000000000000
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -16,5 +17,4 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
