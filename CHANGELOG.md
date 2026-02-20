@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-02-20
+
+### Fixed
+- Fix `export const`/`export let` declarations not being added to the exports list in the TS parser, causing locally declared exported variables (e.g. `export const allScenarios = [...]`) to be invisible during entrypoint taint checking
+
 ## [0.15.1] - 2026-02-17
 
 ### Changed
@@ -187,6 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.15.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.14.2...v0.15.0
 [0.14.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.14.1...v0.14.2

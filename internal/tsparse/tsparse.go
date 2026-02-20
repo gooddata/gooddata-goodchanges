@@ -210,17 +210,41 @@ func extractExports(stmt *ast.Node, analysis *FileAnalysis) {
 
 	default:
 		if ast.HasSyntacticModifier(stmt, ast.ModifierFlagsExport) {
-			name := getDeclName(stmt)
-			if name != "" {
-				isDefault := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsDefault)
-				exportName := name
-				if isDefault {
-					exportName = "default"
+			isDefault := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsDefault)
+
+			// VariableStatement has no Name() — iterate into declarations
+			if stmt.Kind == ast.KindVariableStatement {
+				vs := stmt.AsVariableStatement()
+				if vs.DeclarationList != nil {
+					dl := vs.DeclarationList.AsVariableDeclarationList()
+					if dl.Declarations != nil {
+						for _, decl := range dl.Declarations.Nodes {
+							name := getDeclName(decl)
+							if name != "" {
+								exportName := name
+								if isDefault {
+									exportName = "default"
+								}
+								analysis.Exports = append(analysis.Exports, Export{
+									Name:      exportName,
+									LocalName: name,
+								})
+							}
+						}
+					}
 				}
-				analysis.Exports = append(analysis.Exports, Export{
-					Name:      exportName,
-					LocalName: name,
-				})
+			} else {
+				name := getDeclName(stmt)
+				if name != "" {
+					exportName := name
+					if isDefault {
+						exportName = "default"
+					}
+					analysis.Exports = append(analysis.Exports, Export{
+						Name:      exportName,
+						LocalName: name,
+					})
+				}
 			}
 		}
 	}
