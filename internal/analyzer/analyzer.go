@@ -714,6 +714,38 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 		return nil, nil
 	}
 
+	// Intra-file propagation for seeded taint.
+	// When upstream taint or AST diff marks symbol A as tainted, other symbols
+	// in the same file that reference A should also be tainted.
+	// Example: if KdaDialogController taints KeyDriverAnalysisComponent, then
+	// KeyDriverAnalysis = connect(...)(KeyDriverAnalysisComponent) should also be tainted.
+	for stem, names := range tainted {
+		analysis := fileAnalyses[stem]
+		if analysis == nil || analysis.SourceFile == nil {
+			continue
+		}
+		sourceText := analysis.SourceFile.Text()
+		lineMap := analysis.SourceFile.ECMALineMap()
+		changed := true
+		for changed {
+			changed = false
+			for _, sym := range analysis.Symbols {
+				if names[sym.Name] {
+					continue
+				}
+				bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
+				for tName := range names {
+					if strings.Contains(bodyText, tName) {
+						names[sym.Name] = true
+						changed = true
+						debugf("  %s: %s tainted via intra-file dep on %s (seed propagation)", stem, sym.Name, tName)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Build reverse import graph
 	reverseImports := make(map[string][]string)
 	for stem, edges := range importGraph {
@@ -1498,6 +1530,34 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 	if len(tainted) == 0 {
 		debugf("  (empty — no taint seeded)")
 		return nil
+	}
+
+	// Intra-file propagation for seeded taint (same as in AnalyzeLibraryPackage).
+	for stem, names := range tainted {
+		analysis := fileAnalyses[stem]
+		if analysis == nil || analysis.SourceFile == nil {
+			continue
+		}
+		sourceText := analysis.SourceFile.Text()
+		lineMap := analysis.SourceFile.ECMALineMap()
+		changed := true
+		for changed {
+			changed = false
+			for _, sym := range analysis.Symbols {
+				if names[sym.Name] {
+					continue
+				}
+				bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
+				for tName := range names {
+					if strings.Contains(bodyText, tName) {
+						names[sym.Name] = true
+						changed = true
+						debugf("  %s: %s tainted via intra-file dep on %s (seed propagation)", stem, sym.Name, tName)
+						break
+					}
+				}
+			}
+		}
 	}
 
 	// Symbol-level BFS propagation (same engine as AnalyzeLibraryPackage)
