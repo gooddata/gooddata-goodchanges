@@ -10,6 +10,11 @@ on:
         required: true
         default: 'latest'
         type: string
+      patch:
+        description: 'Contents of patch file to apply before committing'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   upgrade:
@@ -156,6 +161,14 @@ jobs:
           git config user.email "git-action@gooddata.com"
 
           git checkout -b "$BRANCH_NAME"
+
+          PATCH="${{ inputs.patch }}"
+          if [[ -n "$PATCH" ]]; then
+            printf '%b' "$PATCH" > /tmp/vendor-upgrade.patch
+            git apply /tmp/vendor-upgrade.patch
+            echo "Applied patch"
+          fi
+
           git add .
 
           if git diff --cached --quiet; then
