@@ -119,21 +119,18 @@ func (cd ChangeDir) IsFineGrained() bool {
 }
 
 type TargetDef struct {
-	Type       string      `json:"type"`                 // "target", "virtual-target"
 	App        *string     `json:"app,omitempty"`        // rush project name of corresponding app
-	TargetName *string     `json:"targetName,omitempty"` // output name for virtual targets
-	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // globs to watch for virtual targets
+	TargetName *string     `json:"targetName,omitempty"` // custom output name (defaults to package name)
+	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // globs to watch (defaults to **/* if empty)
 	Ignores    []string    `json:"ignores,omitempty"`    // per-target ignore globs (additive with global)
 }
 
-// IsTarget returns true if this target definition is a regular target.
-func (td TargetDef) IsTarget() bool {
-	return td.Type == "target"
-}
-
-// IsVirtualTarget returns true if this target definition is a virtual target.
-func (td TargetDef) IsVirtualTarget() bool {
-	return td.Type == "virtual-target"
+// OutputName returns the target's output name: targetName if set, otherwise the package name.
+func (td TargetDef) OutputName(packageName string) string {
+	if td.TargetName != nil {
+		return *td.TargetName
+	}
+	return packageName
 }
 
 type ProjectConfig struct {

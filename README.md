@@ -86,11 +86,9 @@ Each project can optionally have a `.goodchangesrc.json` file in its root direct
 {
   "targets": [
     {
-      "type": "target",
       "app": "@gooddata/gdc-dashboards"
     },
     {
-      "type": "virtual-target",
       "targetName": "neobackstop",
       "changeDirs": [
         { "glob": "src/**/*" },
@@ -104,20 +102,16 @@ Each project can optionally have a `.goodchangesrc.json` file in its root direct
 }
 ```
 
-### Target
+### Trigger conditions
 
-Marks a project as an e2e test package. The package name is included in the output when any of the 4 trigger conditions are met.
+Each target is triggered by any of these conditions:
 
-**Trigger conditions:**
-
-1. **Direct file changes** -- files changed in the project folder (excluding ignored paths)
+1. **Direct file changes** -- files matching `changeDirs` globs changed (excluding ignored paths). Defaults to `**/*` (entire project) when `changeDirs` is not set.
 2. **External dependency changes** -- a dependency version changed in `pnpm-lock.yaml`
-3. **Tainted workspace imports** -- the target imports a tainted symbol from a workspace library
+3. **Tainted workspace imports** -- a file matching `changeDirs` globs imports a tainted symbol from a workspace library
 4. **Corresponding app is tainted** -- the app specified by `app` is affected (any of the above conditions)
 
-### Virtual target
-
-An aggregated target that uses glob patterns to match files across a project. Does not correspond to a real package name in the output -- uses `targetName` instead.
+### changeDirs
 
 Each `changeDirs` entry is an object with:
 
@@ -142,20 +136,19 @@ Each `changeDirs` entry is an object with:
 
 **Top-level fields:**
 
-| Field     | Type          | Description                                                |
-|-----------|---------------|------------------------------------------------------------|
-| `targets` | `TargetDef[]` | Array of target definitions (see below)                    |
-| `ignores` | `string[]`    | Glob patterns for files to exclude from change detection   |
+| Field     | Type          | Description                                              |
+|-----------|---------------|----------------------------------------------------------|
+| `targets` | `TargetDef[]` | Array of target definitions (see below)                  |
+| `ignores` | `string[]`    | Glob patterns for files to exclude from change detection |
 
 **TargetDef fields (each entry in `targets`):**
 
-| Field        | Type                             | Used by        | Description                                                                                            |
-|--------------|----------------------------------|----------------|--------------------------------------------------------------------------------------------------------|
-| `type`       | `"target"` \| `"virtual-target"` | Both           | Declares what kind of target this is                                                                   |
-| `app`        | `string`                         | Target         | Package name of the corresponding app this e2e package tests                                           |
-| `targetName` | `string`                         | Virtual target | Output name emitted when the virtual target is triggered                                               |
-| `changeDirs` | `ChangeDir[]`                    | Virtual target | Glob patterns to match files. Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
-| `ignores`    | `string[]`                       | Both           | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection |
+| Field        | Type           | Description                                                                                            |
+|--------------|----------------|--------------------------------------------------------------------------------------------------------|
+| `app`        | `string`       | Package name of the corresponding app this target tests                                                |
+| `targetName` | `string`       | Custom output name (defaults to the package name when not set)                                         |
+| `changeDirs` | `ChangeDir[]`  | Glob patterns to match files. Defaults to `**/*` (entire project). Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
+| `ignores`    | `string[]`     | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection |
 
 The `.goodchangesrc.json` file itself is always ignored.
 
