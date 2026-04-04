@@ -117,7 +117,7 @@ func inferScriptKind(path string) core.ScriptKind {
 }
 
 func posToLine(pos int, lineMap []core.TextPos) int {
-	line, _ := core.PositionToLineAndCharacter(pos, lineMap)
+	line, _ := core.PositionToLineAndByteOffset(pos, lineMap)
 	return line + 1
 }
 
