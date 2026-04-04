@@ -59,8 +59,7 @@ func ParseContent(content string, filename string) (*FileAnalysis, error) {
 	}
 
 	sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
-		FileName:         absPath,
-		JSDocParsingMode: ast.JSDocParsingModeParseNone,
+		FileName: absPath,
 	}, content, scriptKind)
 
 	analysis := &FileAnalysis{
