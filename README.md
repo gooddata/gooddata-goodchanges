@@ -198,7 +198,7 @@ Taint spreads through the import graph via unlimited BFS hops:
 - **Re-exports**: `export { X } from "./foo"` and `export * from "./foo"` are tracked as import edges
 - **Cross-package**: taint from upstream workspace dependencies is passed into downstream packages
 - **Intra-file**: if symbol A is tainted and symbol B references A in its body, B becomes tainted
-- **External deps**: lockfile version changes taint all imports from the affected package
+- **External deps**: lockfile dependency changes (detected by YAML-diffing old and new `pnpm-lock.yaml`, including transitive deps via BFS) taint all imports from the affected package
 
 ### CSS/SCSS taint (opt-in)
 
