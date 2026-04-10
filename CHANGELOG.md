@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-04-04
+
+### Changed
+- **Breaking:** Lockfile dep change detection now parses old and new pnpm-lock.yaml as YAML (gopkg.in/yaml.v3) instead of diffing text lines. Compares resolved versions for direct deps per importer, and BFS-walks the snapshots section to detect transitive dep version changes — a transitive change taints the direct dep that pulled it in.
+
 ## [0.16.7] - 2026-04-04
 
 ### Changed
@@ -237,6 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.17.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.16.7...v0.17.0
 [0.16.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.16.6...v0.16.7
 [0.16.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.16.5...v0.16.6
 [0.16.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.16.4...v0.16.5

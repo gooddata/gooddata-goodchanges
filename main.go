@@ -469,6 +469,8 @@ func main() {
 }
 
 // findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
+// Parses old (merge base) and new (current) lockfiles as YAML and compares resolved
+// versions for direct and transitive dependencies.
 // Returns:
 //   - depChanges: project folder → set of changed external dep package names
 //   - versionChanges: subspace name → true for subspaces where lockfileVersion changed
@@ -486,28 +488,21 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[st
 	versionChanged := make(map[string]bool)
 	for subspace := range subspaces {
 		lockfilePath := filepath.Join("common", "config", "subspaces", subspace, "pnpm-lock.yaml")
-		if _, err := os.Stat(lockfilePath); err != nil {
-			continue
-		}
-
-		// Compare lockfileVersion between base commit and current
 		newContent, err := os.ReadFile(lockfilePath)
 		if err != nil {
 			continue
 		}
 		oldContent, _ := git.ShowFile(mergeBase, lockfilePath)
-		oldVersion := lockfile.ParseLockfileVersion([]byte(oldContent))
-		newVersion := lockfile.ParseLockfileVersion(newContent)
-		if oldVersion != newVersion {
+
+		oldLf := lockfile.ParseLockfile([]byte(oldContent))
+		newLf := lockfile.ParseLockfile(newContent)
+
+		if oldLf.Version() != newLf.Version() {
 			versionChanged[subspace] = true
-			logf("lockfileVersion changed in subspace %q: %q → %q\n", subspace, oldVersion, newVersion)
+			logf("lockfileVersion changed in subspace %q: %q → %q\n", subspace, oldLf.Version(), newLf.Version())
 		}
 
-		diffText, err := git.DiffSincePath(mergeBase, lockfilePath)
-		if err != nil || diffText == "" {
-			continue
-		}
-		affected := lockfile.FindDepAffectedProjects(lockfilePath, subspace, diffText)
+		affected := lockfile.FindDepChanges(oldLf, newLf, subspace)
 		for folder, deps := range affected {
 			if result[folder] == nil {
 				result[folder] = make(map[string]bool)

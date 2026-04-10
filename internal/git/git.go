@@ -58,11 +58,6 @@ func MergeBase(branch string) (string, error) {
 	return base, nil
 }
 
-// DiffSincePath returns the unified diff for a specific path since the given commit.
-func DiffSincePath(commit string, path string) (string, error) {
-	return Cmd("diff", commit, "--", path)
-}
-
 // ShowFile returns the content of a file at a specific commit.
 // Returns empty string and no error if the file didn't exist at that commit.
 func ShowFile(commit string, path string) (string, error) {
