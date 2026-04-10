@@ -5,6 +5,7 @@ import (
 
 	"goodchanges/internal/tsparse"
 	"goodchanges/tsgo-vendor/pkg/ast"
+	"goodchanges/tsgo-vendor/pkg/scanner"
 )
 
 // findAffectedSymbolsByASTDiff compares OLD and NEW file ASTs to find which symbols changed.
@@ -188,7 +189,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 
 	// Fallback: if no symbols were detected but the file clearly changed,
 	// check if changes are outside any symbol (e.g. top-level side effects,
-	// copyright comments). If there are exported symbols, taint them all.
+	// copyright comments). If there are runtime side-effect changes, taint all symbols.
 	if len(affected) == 0 && oldAnalysis != nil {
 		oldText := ""
 		if oldAnalysis.SourceFile != nil {
@@ -196,9 +197,22 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		}
 		if normalizeWhitespace(oldText) != normalizeWhitespace(newText) {
 			// File changed but no symbol was affected — changes are outside symbols.
-			// This could be comments, imports, or top-level side-effect code.
-			// Don't taint anything — changes outside symbols don't affect exports.
-			debugf("    file changed but no symbols affected (comments/imports only)")
+			// Check if the changes include runtime side-effect statements.
+			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) {
+				debugf("    file changed with RUNTIME side-effect statements — tainting all symbols")
+				// Use "*" wildcard to mark all exports as affected.
+				// This handles barrel/entrypoint files that have no symbol declarations
+				// but whose runtime side effects affect all importers.
+				affected = append(affected, "*")
+				for _, sym := range newAnalysis.Symbols {
+					if sym.IsTypeOnly && !includeTypes {
+						continue
+					}
+					affected = append(affected, sym.Name)
+				}
+			} else {
+				debugf("    file changed but no symbols affected (comments/imports only)")
+			}
 		}
 	}
 
@@ -418,4 +432,62 @@ func normalizeWhitespace(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// hasSideEffectStmtChanges checks whether the top-level side-effect statements
+// (statements that are NOT declarations, imports, or exports) differ between
+// old and new source files. A change in side-effect statements means the module
+// has different runtime behavior at load time, affecting all importers.
+func hasSideEffectStmtChanges(oldSF *ast.SourceFile, newSF *ast.SourceFile) bool {
+	oldText := collectSideEffectText(oldSF)
+	newText := collectSideEffectText(newSF)
+	return oldText != newText
+}
+
+// collectSideEffectText extracts and normalizes the text of all top-level
+// side-effect statements from a source file. Side-effect statements are
+// everything except declarations, imports, exports, and empty statements.
+func collectSideEffectText(sf *ast.SourceFile) string {
+	if sf == nil {
+		return ""
+	}
+	sourceText := sf.Text()
+	var b strings.Builder
+	for _, stmt := range sf.Statements.Nodes {
+		if isSideEffectStatement(stmt) {
+			// Use SkipTrivia to exclude leading comments/whitespace so that
+			// comment-only changes before a side-effect statement don't
+			// cause false positives.
+			start := scanner.SkipTrivia(sourceText, stmt.Pos())
+			end := stmt.End()
+			if start >= 0 && end <= len(sourceText) && start < end {
+				b.WriteString(normalizeWhitespace(sourceText[start:end]))
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return b.String()
+}
+
+// isSideEffectStatement returns true if a top-level statement is a runtime
+// side effect (not a declaration, import, export, or empty statement).
+// Examples: console.log(), Object.defineProperty(), bare function calls.
+func isSideEffectStatement(stmt *ast.Node) bool {
+	switch stmt.Kind {
+	case ast.KindFunctionDeclaration,
+		ast.KindClassDeclaration,
+		ast.KindInterfaceDeclaration,
+		ast.KindTypeAliasDeclaration,
+		ast.KindEnumDeclaration,
+		ast.KindVariableStatement,
+		ast.KindModuleDeclaration,
+		ast.KindImportDeclaration,
+		ast.KindImportEqualsDeclaration,
+		ast.KindExportDeclaration,
+		ast.KindExportAssignment,
+		ast.KindEmptyStatement:
+		return false
+	default:
+		return true
+	}
 }
