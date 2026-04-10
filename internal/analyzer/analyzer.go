@@ -927,8 +927,21 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 		var affectedNames []string
 		epDir := filepath.Dir(ep.SourceFile)
 
+		// If the entrypoint file itself has "*" taint (e.g. runtime side-effect
+		// changes like console.log()), ALL exports are affected since every
+		// importer will execute the entrypoint module at load time.
+		epAllTainted := tainted[epStem]["*"]
+		if epAllTainted {
+			debugf("  entrypoint file has '*' taint — all exports affected")
+		}
+
 		for _, exp := range epAnalysis.Exports {
 			if exp.IsTypeOnly && !includeTypes {
+				continue
+			}
+
+			if epAllTainted {
+				affectedNames = append(affectedNames, exp.Name)
 				continue
 			}
 
