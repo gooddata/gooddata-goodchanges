@@ -134,8 +134,9 @@ func (td TargetDef) OutputName(packageName string) string {
 }
 
 type ProjectConfig struct {
-	Targets []TargetDef `json:"targets,omitempty"`
-	Ignores []string    `json:"ignores,omitempty"`
+	Targets    []TargetDef `json:"targets,omitempty"`
+	Ignores    []string    `json:"ignores,omitempty"`
+	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // global changeDirs: triggers all exports (library) or all targets (app)
 }
 
 // LoadProjectConfig reads .goodchangesrc.json from the project folder.

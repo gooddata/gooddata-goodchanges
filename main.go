@@ -264,6 +264,19 @@ func main() {
 				logf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 			}
 
+			// Global changeDirs: if triggered, taint all exports (skip expensive analysis)
+			libCfg := configMap[info.ProjectFolder]
+			if libCfg != nil && len(libCfg.ChangeDirs) > 0 {
+				if globalChangeDirTriggered(libCfg.ChangeDirs, changedFiles, info.ProjectFolder, libCfg) {
+					logf("  Global changeDirs triggered — all exports tainted\n\n")
+					if allUpstreamTaint[pkgName] == nil {
+						allUpstreamTaint[pkgName] = make(map[string]bool)
+					}
+					allUpstreamTaint[pkgName]["*"] = true
+					continue
+				}
+			}
+
 			// Build upstream taint for this package from its dependencies.
 			// allUpstreamTaint is only read here — writes happen after the level completes.
 			pkgUpstreamTaint := make(map[string]map[string]bool)
@@ -347,6 +360,20 @@ func main() {
 		cfg := configMap[rp.ProjectFolder]
 		if cfg == nil {
 			continue
+		}
+
+		// Global changeDirs: if triggered, add ALL targets for this package
+		if len(cfg.ChangeDirs) > 0 {
+			if globalChangeDirTriggered(cfg.ChangeDirs, changedFiles, rp.ProjectFolder, cfg) {
+				for _, td := range cfg.Targets {
+					name := td.OutputName(rp.PackageName)
+					if len(targetPatterns) > 0 && !matchesTargetFilter(name, targetPatterns) {
+						continue
+					}
+					changedE2E[name] = &TargetResult{Name: name}
+				}
+				continue
+			}
 		}
 
 		for _, td := range cfg.Targets {
@@ -517,6 +544,25 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[st
 
 // matchesTargetFilter checks if a target name matches any of the given patterns.
 // Patterns support * as a wildcard matching any characters (including /).
+// globalChangeDirTriggered checks if any changed file matches a global changeDir glob.
+func globalChangeDirTriggered(changeDirs []rush.ChangeDir, changedFiles []string, projectFolder string, cfg *rush.ProjectConfig) bool {
+	for _, cd := range changeDirs {
+		for _, f := range changedFiles {
+			if !strings.HasPrefix(f, projectFolder+"/") {
+				continue
+			}
+			relPath := strings.TrimPrefix(f, projectFolder+"/")
+			if cfg.IsIgnored(relPath) {
+				continue
+			}
+			if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func matchesTargetFilter(name string, patterns []string) bool {
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
