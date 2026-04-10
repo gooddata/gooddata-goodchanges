@@ -102,6 +102,21 @@ Each project can optionally have a `.goodchangesrc.json` file in its root direct
 }
 ```
 
+### Global changeDirs
+
+Top-level `changeDirs` apply to the entire package. When any changed file matches a global changeDir glob, all library exports are wildcard-tainted and all targets are triggered. This is useful for files that affect everything but aren't tracked by the AST analysis (e.g. locale bundles, config files).
+
+```json
+{
+  "changeDirs": [
+    { "glob": "src/localization/bundles/en-US.json" }
+  ],
+  "targets": [
+    { "targetName": "my-tests", "changeDirs": [{ "glob": "**/*", "type": "fine-grained", "filter": "**/*.test.ts*" }] }
+  ]
+}
+```
+
 ### Trigger conditions
 
 Each target is triggered by any of these conditions:
@@ -136,19 +151,20 @@ Each `changeDirs` entry is an object with:
 
 **Top-level fields:**
 
-| Field     | Type          | Description                                              |
-|-----------|---------------|----------------------------------------------------------|
-| `targets` | `TargetDef[]` | Array of target definitions (see below)                  |
-| `ignores` | `string[]`    | Glob patterns for files to exclude from change detection |
+| Field        | Type          | Description                                                                                             |
+|--------------|---------------|---------------------------------------------------------------------------------------------------------|
+| `targets`    | `TargetDef[]` | Array of target definitions (see below)                                                                 |
+| `ignores`    | `string[]`    | Glob patterns for files to exclude from change detection                                                |
+| `changeDirs` | `ChangeDir[]` | Global changeDirs. When triggered, taints all library exports and triggers all targets in this package. |
 
 **TargetDef fields (each entry in `targets`):**
 
-| Field        | Type           | Description                                                                                            |
-|--------------|----------------|--------------------------------------------------------------------------------------------------------|
-| `app`        | `string`       | Package name of the corresponding app this target tests                                                |
-| `targetName` | `string`       | Custom output name (defaults to the package name when not set)                                         |
-| `changeDirs` | `ChangeDir[]`  | Glob patterns to match files. Defaults to `**/*` (entire project). Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
-| `ignores`    | `string[]`     | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection |
+| Field        | Type          | Description                                                                                                                                 |
+|--------------|---------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `app`        | `string`      | Package name of the corresponding app this target tests                                                                                     |
+| `targetName` | `string`      | Custom output name (defaults to the package name when not set)                                                                              |
+| `changeDirs` | `ChangeDir[]` | Glob patterns to match files. Defaults to `**/*` (entire project). Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
+| `ignores`    | `string[]`    | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection                                      |
 
 The `.goodchangesrc.json` file itself is always ignored.
 
