@@ -24,6 +24,7 @@ var version string
 
 var flagIncludeTypes bool
 var flagIncludeCSS bool
+var flagIgnoreAppRelationship bool
 var flagLog bool
 var flagDebug bool
 
@@ -51,10 +52,25 @@ func main() {
 			fmt.Println()
 			os.Exit(0)
 		}
+		if arg == "--list" {
+			rushConfig, err := rush.LoadConfig(".")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading rush config: %v\n", err)
+				os.Exit(1)
+			}
+			data, err := json.MarshalIndent(rushConfig.Projects, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error marshalling projects: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(data))
+			os.Exit(0)
+		}
 	}
 
 	flagIncludeTypes = envBool("INCLUDE_TYPES")
 	flagIncludeCSS = envBool("INCLUDE_CSS")
+	flagIgnoreAppRelationship = envBool("IGNORE_APP_RELATIONSHIP")
 
 	logLevel := strings.ToUpper(os.Getenv("LOG_LEVEL"))
 	flagLog = logLevel == "BASIC" || logLevel == "DEBUG"
@@ -392,7 +408,7 @@ func main() {
 			}
 
 			// Quick check: app taint
-			if td.App != nil {
+			if td.App != nil && !flagIgnoreAppRelationship {
 				appInfo := projectMap[*td.App]
 				if appInfo != nil {
 					if changedProjects[*td.App] != nil {
