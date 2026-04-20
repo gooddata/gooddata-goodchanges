@@ -57,14 +57,15 @@ JSON array of target objects:
 
 ## Environment variables
 
-| Variable         | Description                                                                                                                   | Default         |
-|------------------|-------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| `LOG_LEVEL`      | Logging verbosity. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing to stderr                              | _(no logging)_  |
-| `INCLUDE_TYPES`  | When set to any non-empty value, includes type-only changes (interfaces, type aliases, type annotations) in taint propagation | _(disabled)_    |
-| `INCLUDE_CSS`    | When set to any non-empty value, enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains      | _(disabled)_    |
-| `COMPARE_COMMIT` | Specific git commit hash to compare against (overrides branch-based comparison)                                               | _(empty)_       |
-| `COMPARE_BRANCH` | Git branch to compute merge base against                                                                                      | `origin/master` |
-| `TARGETS`        | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`).         | _(all targets)_ |
+| Variable                  | Description                                                                                                                                                    | Default         |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `LOG_LEVEL`               | Logging verbosity. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing to stderr                                                               | _(no logging)_  |
+| `INCLUDE_TYPES`           | When set to any non-empty value, includes type-only changes (interfaces, type aliases, type annotations) in taint propagation                                  | _(disabled)_    |
+| `INCLUDE_CSS`             | When set to any non-empty value, enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains                                       | _(disabled)_    |
+| `COMPARE_COMMIT`          | Specific git commit hash to compare against (overrides branch-based comparison)                                                                                | _(empty)_       |
+| `COMPARE_BRANCH`          | Git branch to compute merge base against                                                                                                                       | `origin/master` |
+| `TARGETS`                 | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`).                                          | _(all targets)_ |
+| `IGNORE_APP_RELATIONSHIP` | When set to any non-empty value, ignores the `app` field in target configs. Targets are no longer triggered solely because their corresponding app is tainted. | _(disabled)_    |
 
 ## Library vs app detection
 
@@ -124,7 +125,7 @@ Each target is triggered by any of these conditions:
 1. **Direct file changes** -- files matching `changeDirs` globs changed (excluding ignored paths). Defaults to `**/*` (entire project) when `changeDirs` is not set.
 2. **External dependency changes** -- a dependency version changed in `pnpm-lock.yaml`
 3. **Tainted workspace imports** -- a file matching `changeDirs` globs imports a tainted symbol from a workspace library
-4. **Corresponding app is tainted** -- the app specified by `app` is affected (any of the above conditions)
+4. **Corresponding app is tainted** -- the app specified by `app` is affected (any of the above conditions). Disabled when `IGNORE_APP_RELATIONSHIP` env var is set.
 
 ### changeDirs
 

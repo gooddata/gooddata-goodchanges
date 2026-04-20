@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-04-20
+
+### Added
+- `IGNORE_APP_RELATIONSHIP` env var. When set, the `app` field in target configs is ignored — targets are no longer triggered just because their corresponding app is tainted (only direct changes, lockfile changes, and tainted workspace imports apply).
+
 ## [0.18.1] - 2026-04-13
 
 ### Changed
@@ -257,6 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.19.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.17.0...v0.17.1
