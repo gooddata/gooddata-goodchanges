@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-04-23
+
+### Fixed
+- Global `changeDirs` taint now enumerates every export from each entrypoint (including recursively via `export * from "./local"`) instead of seeding a `"*"` wildcard. Downstream packages consume exports by exact name, so the wildcard never matched named imports — taint stopped at the first hop and targets transitively dependent on the tainted library were missed.
+
 ## [0.19.0] - 2026-04-20
 
 ### Added
