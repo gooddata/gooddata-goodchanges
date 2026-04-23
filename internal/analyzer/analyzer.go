@@ -95,28 +95,52 @@ func FindEntrypoints(projectFolder string, pkg rush.PackageJSON) []Entrypoint {
 	return entrypoints
 }
 
-// CollectEntrypointExports parses an entrypoint file and returns all export names.
+// CollectEntrypointExports returns every export name reachable from an entrypoint,
+// recursively following `export * from "./local"` chains within the same project.
+// If an `export *` points at a source that cannot be enumerated (external package
+// or unresolvable path), "*" is included as a wildcard fallback marker.
 func CollectEntrypointExports(projectFolder string, ep Entrypoint) []string {
-	fullPath := filepath.Join(projectFolder, ep.SourceFile)
-	analysis, err := tsparse.ParseFile(fullPath)
-	if err != nil {
-		debugf("CollectEntrypointExports: parse error for %s: %v", fullPath, err)
-		return nil
-	}
-	var names []string
 	seen := make(map[string]bool)
-	for _, exp := range analysis.Exports {
-		name := exp.Name
-		if name == "*" {
-			continue
-		}
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
+	visited := make(map[string]bool)
+	collectExportsFromFile(projectFolder, ep.SourceFile, seen, visited)
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
 	}
+	sort.Strings(names)
 	debugf("CollectEntrypointExports: %s (%s) → %d exports", ep.ExportPath, ep.SourceFile, len(names))
 	return names
+}
+
+func collectExportsFromFile(projectFolder, relFile string, seen, visited map[string]bool) {
+	if visited[relFile] {
+		return
+	}
+	visited[relFile] = true
+	fullPath := filepath.Join(projectFolder, relFile)
+	analysis, err := tsparse.ParseFile(fullPath)
+	if err != nil {
+		debugf("collectExportsFromFile: parse error for %s: %v", fullPath, err)
+		return
+	}
+	fileDir := filepath.Dir(relFile)
+	for _, exp := range analysis.Exports {
+		if exp.IsStar && exp.Name == "*" {
+			if strings.HasPrefix(exp.Source, ".") {
+				resolved := resolveImportToFile(fileDir, exp.Source, projectFolder)
+				if resolved != "" {
+					collectExportsFromFile(projectFolder, resolved, seen, visited)
+					continue
+				}
+			}
+			seen["*"] = true
+			continue
+		}
+		if exp.Name == "" {
+			continue
+		}
+		seen[exp.Name] = true
+	}
 }
 
 // HasTaintedImports checks if any source file in the given folder imports

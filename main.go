@@ -280,15 +280,27 @@ func main() {
 				logf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 			}
 
-			// Global changeDirs: if triggered, taint all exports (skip expensive analysis)
+			// Global changeDirs: if triggered, enumerate all exports per entrypoint
+			// and seed them as tainted (skip expensive per-symbol analysis).
 			libCfg := configMap[info.ProjectFolder]
 			if libCfg != nil && len(libCfg.ChangeDirs) > 0 {
 				if globalChangeDirTriggered(libCfg.ChangeDirs, changedFiles, info.ProjectFolder, libCfg) {
-					logf("  Global changeDirs triggered — all exports tainted\n\n")
-					if allUpstreamTaint[pkgName] == nil {
-						allUpstreamTaint[pkgName] = make(map[string]bool)
+					totalExports := 0
+					for _, ep := range entrypoints {
+						specifier := pkgName
+						if ep.ExportPath != "." {
+							specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
+						}
+						exports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
+						if allUpstreamTaint[specifier] == nil {
+							allUpstreamTaint[specifier] = make(map[string]bool)
+						}
+						for _, name := range exports {
+							allUpstreamTaint[specifier][name] = true
+						}
+						totalExports += len(exports)
 					}
-					allUpstreamTaint[pkgName]["*"] = true
+					logf("  Global changeDirs triggered — %d exports tainted across %d entrypoints\n\n", totalExports, len(entrypoints))
 					continue
 				}
 			}
