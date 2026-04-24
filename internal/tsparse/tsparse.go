@@ -387,11 +387,19 @@ func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 	// Phase 1: collect dynamic imports assigned to variables or destructured
 	// varName → specifier (for pattern 1)
 	varImports := make(map[string]string)
+	// Every dynamic import() specifier seen, regardless of surrounding context.
+	// Used to emit side-effect imports for calls no other pattern captures
+	// (e.g. `() => import("pkg")` passed to a loader).
+	allSpecifiers := make(map[string]bool)
 
 	var walkPhase1 func(n *ast.Node)
 	walkPhase1 = func(n *ast.Node) {
 		if n == nil {
 			return
+		}
+
+		if spec := extractDynamicImportSpecifier(n); spec != "" {
+			allSpecifiers[spec] = true
 		}
 
 		if n.Kind == ast.KindVariableDeclaration {
@@ -438,6 +446,7 @@ func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 	}
 
 	if len(varImports) == 0 {
+		emitSideEffectDynamicImports(analysis, allSpecifiers)
 		return
 	}
 
@@ -487,6 +496,28 @@ func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 			Names:  nameList,
 			Source: specifier,
 		})
+	}
+
+	emitSideEffectDynamicImports(analysis, allSpecifiers)
+}
+
+// emitSideEffectDynamicImports adds a side-effect Import entry (empty Names) for
+// every dynamic import specifier that none of the pattern-based phases captured.
+// Covers bare calls like `() => import("pkg")` and `const mod = await import("pkg")`
+// where `mod` is used opaquely (no property access). Downstream taint treats these
+// as full-taint imports, matching how static `import "pkg"` is handled.
+func emitSideEffectDynamicImports(analysis *FileAnalysis, allSpecifiers map[string]bool) {
+	if len(allSpecifiers) == 0 {
+		return
+	}
+	covered := make(map[string]bool)
+	for _, imp := range analysis.Imports {
+		covered[imp.Source] = true
+	}
+	for spec := range allSpecifiers {
+		if !covered[spec] {
+			analysis.Imports = append(analysis.Imports, Import{Source: spec})
+		}
 	}
 }
 
