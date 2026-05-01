@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"goodchanges/internal/log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,13 +39,6 @@ func envBool(key string) bool {
 	return os.Getenv(key) != ""
 }
 
-// logf prints to stdout only when LOG_LEVEL is set.
-func logf(format string, args ...interface{}) {
-	if flagLog {
-		fmt.Printf(format, args...)
-	}
-}
-
 func main() {
 	for _, arg := range os.Args[1:] {
 		if arg == "-v" || arg == "--version" {
@@ -76,7 +70,7 @@ func main() {
 	flagLog = logLevel == "BASIC" || logLevel == "DEBUG"
 	flagDebug = logLevel == "DEBUG"
 
-	analyzer.Debug = flagDebug
+	log.Debug = flagDebug
 	analyzer.IncludeCSS = flagIncludeCSS
 
 	var mergeBase string
@@ -190,11 +184,11 @@ func main() {
 	// Topologically sort: level 0 = lowest-level (no deps on other affected packages)
 	levels := rush.TopologicalSort(projectMap, affectedSet)
 
-	logf("Merge base: %s\n\n", mergeBase)
-	logf("Directly changed projects: %d\n", len(changedProjects))
-	logf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
-	logf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
-	logf("Processing in %d levels (bottom-up):\n\n", len(levels))
+	log.Basicf("Merge base: %s\n\n", mergeBase)
+	log.Basicf("Directly changed projects: %d\n", len(changedProjects))
+	log.Basicf("Dep-affected projects (lockfile): %d\n", len(depChangedDeps))
+	log.Basicf("Total affected projects (incl. transitive dependents): %d\n", len(affectedSet))
+	log.Basicf("Processing in %d levels (bottom-up):\n\n", len(levels))
 
 	// Track affected exports per package for cross-package propagation.
 	allUpstreamTaint := make(map[string]map[string]bool)
@@ -228,7 +222,7 @@ func main() {
 	}
 
 	for levelIdx, level := range levels {
-		logf("--- Level %d (%d packages) ---\n\n", levelIdx, len(level))
+		log.Basicf("--- Level %d (%d packages) ---\n\n", levelIdx, len(level))
 
 		var wg sync.WaitGroup
 		resultsCh := make(chan pkgResult, len(level))
@@ -244,32 +238,32 @@ func main() {
 			changedDeps := depChangedDeps[info.ProjectFolder]
 			isDepAffected := len(changedDeps) > 0
 
-			logf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
+			log.Basicf("=== %s (%s) ===\n", pkgName, info.ProjectFolder)
 			if directlyChanged && isDepAffected {
-				logf("  [directly changed + dep change in lockfile]\n")
+				log.Basicf("  [directly changed + dep change in lockfile]\n")
 			} else if directlyChanged {
-				logf("  [directly changed]\n")
+				log.Basicf("  [directly changed]\n")
 			} else if isDepAffected {
-				logf("  [dep change in lockfile]\n")
+				log.Basicf("  [dep change in lockfile]\n")
 			} else {
-				logf("  [affected via dependencies]\n")
+				log.Basicf("  [affected via dependencies]\n")
 			}
 
 			if !lib {
-				logf("  Type: app (not a library) — skipping export analysis\n\n")
+				log.Basicf("  Type: app (not a library) — skipping export analysis\n\n")
 				continue
 			}
 
-			logf("  Type: library\n")
+			log.Basicf("  Type: library\n")
 
 			entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
 			if len(entrypoints) == 0 {
-				logf("  No entrypoints found — skipping\n\n")
+				log.Basicf("  No entrypoints found — skipping\n\n")
 				continue
 			}
-			logf("  Entrypoints:\n")
+			log.Basicf("  Entrypoints:\n")
 			for _, ep := range entrypoints {
-				logf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
+				log.Basicf("    %s → %s\n", ep.ExportPath, ep.SourceFile)
 			}
 
 			if isDepAffected {
@@ -277,7 +271,7 @@ func main() {
 				for d := range changedDeps {
 					depNames = append(depNames, d)
 				}
-				logf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
+				log.Basicf("  Changed external deps: %s\n", strings.Join(depNames, ", "))
 			}
 
 			// Global changeDirs: if triggered, enumerate all exports per entrypoint
@@ -300,7 +294,7 @@ func main() {
 						}
 						totalExports += len(exports)
 					}
-					logf("  Global changeDirs triggered — %d exports tainted across %d entrypoints\n\n", totalExports, len(entrypoints))
+					log.Basicf("  Global changeDirs triggered — %d exports tainted across %d entrypoints\n\n", totalExports, len(entrypoints))
 					continue
 				}
 			}
@@ -340,11 +334,11 @@ func main() {
 
 		// Merge results into allUpstreamTaint after all goroutines in this level are done
 		for res := range resultsCh {
-			logf("  Affected exports for %s:\n", res.pkgName)
+			log.Basicf("  Affected exports for %s:\n", res.pkgName)
 			for _, ae := range res.affected {
-				logf("    Entrypoint %q:\n", ae.EntrypointPath)
+				log.Basicf("    Entrypoint %q:\n", ae.EntrypointPath)
 				for _, name := range ae.ExportNames {
-					logf("      - %s\n", name)
+					log.Basicf("      - %s\n", name)
 				}
 
 				specifier := res.pkgName
@@ -358,7 +352,7 @@ func main() {
 					allUpstreamTaint[specifier][name] = true
 				}
 			}
-			logf("\n")
+			log.Basicf("\n")
 		}
 	}
 
@@ -505,15 +499,15 @@ func main() {
 	})
 
 	if flagLog {
-		logf("Affected e2e packages (%d):\n", len(e2eList))
+		log.Basicf("Affected e2e packages (%d):\n", len(e2eList))
 		for _, result := range e2eList {
 			if len(result.Detections) > 0 {
-				logf("  - %s (fine-grained: %d files)\n", result.Name, len(result.Detections))
+				log.Basicf("  - %s (fine-grained: %d files)\n", result.Name, len(result.Detections))
 				for _, d := range result.Detections {
-					logf("      %s\n", d)
+					log.Basicf("      %s\n", d)
 				}
 			} else {
-				logf("  - %s\n", result.Name)
+				log.Basicf("  - %s\n", result.Name)
 			}
 		}
 	}
@@ -554,7 +548,7 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[st
 
 		if oldLf.Version() != newLf.Version() {
 			versionChanged[subspace] = true
-			logf("lockfileVersion changed in subspace %q: %q → %q\n", subspace, oldLf.Version(), newLf.Version())
+			log.Basicf("lockfileVersion changed in subspace %q: %q → %q\n", subspace, oldLf.Version(), newLf.Version())
 		}
 
 		affected := lockfile.FindDepChanges(oldLf, newLf, subspace)
