@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-05-01
+
+### Changed
+- `LOG_LEVEL=BASIC` output now goes to stderr instead of stdout. Stdout is reserved for the JSON result, so piping `goodchanges | jq …` works with logging enabled.
+
 ## [0.19.4] - 2026-04-29
 
 ### Changed
@@ -282,6 +287,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.20.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.4...v0.20.0
 [0.19.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.2...v0.19.3
 [0.19.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.1...v0.19.2

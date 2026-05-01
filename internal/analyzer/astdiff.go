@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"goodchanges/internal/log"
 	"strings"
 
 	"goodchanges/internal/tsparse"
@@ -61,10 +62,10 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		if !existedBefore {
 			// New symbol — it's affected
 			if sym.IsTypeOnly && !includeTypes {
-				debugf("    %s: NEW type-only symbol (skipped, includeTypes=false)", sym.Name)
+				log.Debugf("    %s: NEW type-only symbol (skipped, includeTypes=false)", sym.Name)
 				continue
 			}
-			debugf("    %s: NEW symbol", sym.Name)
+			log.Debugf("    %s: NEW symbol", sym.Name)
 			affected = append(affected, sym.Name)
 			continue
 		}
@@ -78,7 +79,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		if sym.IsTypeOnly {
 			// interface/type alias — always type-only
 			if includeTypes {
-				debugf("    %s: type-only change (interface/type)", sym.Name)
+				log.Debugf("    %s: type-only change (interface/type)", sym.Name)
 				affected = append(affected, sym.Name)
 			}
 			continue
@@ -95,14 +96,14 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		if oldRuntime != "" && newRuntime != "" && oldRuntime == newRuntime {
 			// Only type annotations changed (e.g. `x = foo` → `x = foo as Bar`)
 			if includeTypes {
-				debugf("    %s: type-only change (runtime text identical)", sym.Name)
+				log.Debugf("    %s: type-only change (runtime text identical)", sym.Name)
 				affected = append(affected, sym.Name)
 			}
 			continue
 		}
 
 		// Runtime change
-		debugf("    %s: RUNTIME change", sym.Name)
+		log.Debugf("    %s: RUNTIME change", sym.Name)
 		affected = append(affected, sym.Name)
 	}
 
@@ -114,7 +115,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		}
 		for _, sym := range oldAnalysis.Symbols {
 			if !newSymbolNames[sym.Name] {
-				debugf("    %s: DELETED symbol", sym.Name)
+				log.Debugf("    %s: DELETED symbol", sym.Name)
 			}
 		}
 	}
@@ -168,7 +169,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 					affectedSet[sym.Name] = true
 					affectedTypeOnly[sym.Name] = sym.IsTypeOnly
 					changed = true
-					debugf("    %s: affected via intra-file dep on %s", sym.Name, dep)
+					log.Debugf("    %s: affected via intra-file dep on %s", sym.Name, dep)
 					break
 				}
 			}
@@ -199,7 +200,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 			// File changed but no symbol was affected — changes are outside symbols.
 			// Check if the changes include runtime side-effect statements.
 			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) {
-				debugf("    file changed with RUNTIME side-effect statements — tainting all symbols")
+				log.Debugf("    file changed with RUNTIME side-effect statements — tainting all symbols")
 				// Use "*" wildcard to mark all exports as affected.
 				// This handles barrel/entrypoint files that have no symbol declarations
 				// but whose runtime side effects affect all importers.
@@ -211,7 +212,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 					affected = append(affected, sym.Name)
 				}
 			} else {
-				debugf("    file changed but no symbols affected (comments/imports only)")
+				log.Debugf("    file changed but no symbols affected (comments/imports only)")
 			}
 		}
 	}

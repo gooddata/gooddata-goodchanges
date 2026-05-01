@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"encoding/json"
+	"goodchanges/internal/log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,7 +81,7 @@ func resolveToSource(projectFolder string, builtPath string) string {
 		for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
 			tryPath := filepath.Join(projectFolder, base+ext)
 			if _, err := os.Stat(tryPath); err == nil {
-				debugf("  resolveToSource: %s → %s", builtPath, base+ext)
+				log.Debugf("  resolveToSource: %s → %s", builtPath, base+ext)
 				return base + ext
 			}
 		}
@@ -88,18 +89,18 @@ func resolveToSource(projectFolder string, builtPath string) string {
 			tryPath := filepath.Join(projectFolder, base, "index"+ext)
 			if _, err := os.Stat(tryPath); err == nil {
 				result := filepath.Join(base, "index"+ext)
-				debugf("  resolveToSource: %s → %s", builtPath, result)
+				log.Debugf("  resolveToSource: %s → %s", builtPath, result)
 				return result
 			}
 		}
 		tryPath := filepath.Join(projectFolder, candidate)
 		if _, err := os.Stat(tryPath); err == nil {
-			debugf("  resolveToSource: %s → %s (exact)", builtPath, candidate)
+			log.Debugf("  resolveToSource: %s → %s (exact)", builtPath, candidate)
 			return candidate
 		}
 	}
 
-	debugf("  resolveToSource: %s → (not found)", builtPath)
+	log.Debugf("  resolveToSource: %s → (not found)", builtPath)
 	return ""
 }
 
@@ -122,7 +123,7 @@ func resolveImportToFile(fromDir string, source string, projectFolder string) st
 	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
 		tryPath := filepath.Join(projectFolder, relPath+ext)
 		if _, err := os.Stat(tryPath); err == nil {
-			debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, relPath+ext)
+			log.Debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, relPath+ext)
 			return relPath + ext
 		}
 	}
@@ -130,11 +131,11 @@ func resolveImportToFile(fromDir string, source string, projectFolder string) st
 		tryPath := filepath.Join(projectFolder, relPath, "index"+ext)
 		if _, err := os.Stat(tryPath); err == nil {
 			result := filepath.Join(relPath, "index"+ext)
-			debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, result)
+			log.Debugf("  resolveImportToFile: %s (from %s) → %s", source, fromDir, result)
 			return result
 		}
 	}
-	debugf("  resolveImportToFile: %s (from %s) → (not found)", source, fromDir)
+	log.Debugf("  resolveImportToFile: %s (from %s) → (not found)", source, fromDir)
 	return ""
 }
 
