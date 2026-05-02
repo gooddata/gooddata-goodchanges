@@ -134,6 +134,7 @@ func (td TargetDef) OutputName(packageName string) string {
 }
 
 type ProjectConfig struct {
+	Type       *string     `json:"type,omitempty"`       // "library" or "app". When set, overrides automatic inference.
 	Targets    []TargetDef `json:"targets,omitempty"`
 	Ignores    []string    `json:"ignores,omitempty"`
 	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // global changeDirs: triggers all exports (library) or all targets (app)

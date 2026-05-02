@@ -69,7 +69,9 @@ JSON array of target objects:
 
 ## Library vs app detection
 
-A package is classified as a **library** if its `package.json` contains any of:
+Detection can be overridden by setting the top-level `type` field in `.goodchangesrc.json` to `"library"` or `"app"` (see [Configuration](#configuration)). When unset, classification is inferred.
+
+A package is inferred as a **library** if its `package.json` contains any of:
 
 - `types` (TypeScript type declarations)
 - `exports` (modern package exports field)
@@ -77,7 +79,7 @@ A package is classified as a **library** if its `package.json` contains any of:
 
 Libraries get full AST-level analysis: entrypoint resolution, symbol diffing, and taint propagation through their internal import graph.
 
-Everything else is an **app** (bundled). Apps are not analyzed for granular exports -- if any file in an app changes, the app is considered fully tainted.
+Everything else is inferred as an **app** (bundled). Apps are not analyzed for granular exports -- if any file in an app changes, the app is considered fully tainted.
 
 ## Configuration
 
@@ -152,11 +154,12 @@ Each `changeDirs` entry is an object with:
 
 **Top-level fields:**
 
-| Field        | Type          | Description                                                                                             |
-|--------------|---------------|---------------------------------------------------------------------------------------------------------|
-| `targets`    | `TargetDef[]` | Array of target definitions (see below)                                                                 |
-| `ignores`    | `string[]`    | Glob patterns for files to exclude from change detection                                                |
-| `changeDirs` | `ChangeDir[]` | Global changeDirs. When triggered, taints all library exports and triggers all targets in this package. |
+| Field        | Type                 | Description                                                                                                                                                                    |
+|--------------|----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `type`       | `"library" \| "app"` | Optional. Forces this package's classification, skipping the inference described in [Library vs app detection](#library-vs-app-detection). Invalid values cause a fatal error. |
+| `targets`    | `TargetDef[]`        | Array of target definitions (see below)                                                                                                                                        |
+| `ignores`    | `string[]`           | Glob patterns for files to exclude from change detection                                                                                                                       |
+| `changeDirs` | `ChangeDir[]`        | Global changeDirs. When triggered, taints all library exports and triggers all targets in this package.                                                                        |
 
 **TargetDef fields (each entry in `targets`):**
 

@@ -32,7 +32,12 @@ type AffectedExport struct {
 }
 
 // IsLibrary determines if a package is a library (transpiled) vs a bundled app.
-func IsLibrary(pkg rush.PackageJSON) bool {
+// When the project config sets an explicit `type`, that value wins; otherwise
+// the result is inferred from package.json fields.
+func IsLibrary(pc *rush.ProjectConfig, pkg rush.PackageJSON) bool {
+	if pc != nil && pc.Type != nil {
+		return *pc.Type == "library"
+	}
 	if pkg.Types != "" {
 		return true
 	}

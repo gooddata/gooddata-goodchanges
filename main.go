@@ -104,6 +104,16 @@ func main() {
 	projectMap := rush.BuildProjectMap(rushConfig)
 	configMap := rush.LoadAllProjectConfigs(rushConfig)
 
+	for projectFolder, cfg := range configMap {
+		if cfg == nil || cfg.Type == nil {
+			continue
+		}
+		if *cfg.Type != "library" && *cfg.Type != "app" {
+			fmt.Fprintf(os.Stderr, "Invalid type %q in %s/.goodchangesrc.json: must be \"library\" or \"app\"\n", *cfg.Type, projectFolder)
+			os.Exit(1)
+		}
+	}
+
 	// Parse TARGETS filter early to skip expensive detection for non-matching targets
 	var targetPatterns []string
 	if targetsEnv := os.Getenv("TARGETS"); targetsEnv != "" {
@@ -208,7 +218,7 @@ func main() {
 		if info == nil {
 			continue
 		}
-		if analyzer.IsLibrary(info.Package) {
+		if analyzer.IsLibrary(configMap[rp.ProjectFolder], info.Package) {
 			if allUpstreamTaint[rp.PackageName] == nil {
 				allUpstreamTaint[rp.PackageName] = make(map[string]bool)
 			}
@@ -233,7 +243,7 @@ func main() {
 				continue
 			}
 			pkg := info.Package
-			lib := analyzer.IsLibrary(pkg)
+			lib := analyzer.IsLibrary(configMap[info.ProjectFolder], pkg)
 			directlyChanged := changedProjects[pkgName] != nil
 			changedDeps := depChangedDeps[info.ProjectFolder]
 			isDepAffected := len(changedDeps) > 0
