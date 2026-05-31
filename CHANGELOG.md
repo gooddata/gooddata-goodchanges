@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-05-31
+
+### Fixed
+- Aliased named imports (`import { X as Y }`) now propagate taint correctly. The import parser only captured the local binding name (`Y`) and discarded the original imported name (`X`), so taint matching — which keys on the name the source module exports — never matched, and propagation stopped at the renamed hop. Imports now carry both names: the source-side name is used to match exported/affected symbols, and the local name is used to scan the importing file's body for usage. This fixes cases like `import { Root as InnerRoot }` where a change to `Root` failed to reach the importing file's exports (and therefore its entrypoint and dependent targets).
+
 ## [0.21.0] - 2026-05-02
 
 ### Added
