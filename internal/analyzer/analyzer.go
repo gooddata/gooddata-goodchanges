@@ -398,12 +398,13 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				continue
 			}
 			var localNames, origNames []string
-			for _, name := range imp.Names {
+			for i, name := range imp.Names {
+				local := importLocalName(imp, i)
 				if strings.HasPrefix(name, "*:") {
-					localNames = append(localNames, name)
+					localNames = append(localNames, local)
 					origNames = append(origNames, "*")
 				} else {
-					localNames = append(localNames, name)
+					localNames = append(localNames, local)
 					origNames = append(origNames, name)
 				}
 			}
@@ -525,7 +526,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				}
 				if isCSSModule(imp.Source) && len(imp.Names) > 0 {
 					// CSS module with assigned import: only taint symbols that use the binding
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
@@ -569,7 +570,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 					tainted[stem] = make(map[string]bool)
 				}
 				if len(imp.Names) > 0 {
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
@@ -617,12 +618,12 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 					continue
 				}
 				var taintedLocalNames []string
-				for _, name := range imp.Names {
+				for i, name := range imp.Names {
 					if strings.HasPrefix(name, "*:") {
 						// Namespace import — any upstream taint means the namespace is tainted
-						taintedLocalNames = append(taintedLocalNames, name)
+						taintedLocalNames = append(taintedLocalNames, importLocalName(imp, i))
 					} else if affectedNames[name] {
-						taintedLocalNames = append(taintedLocalNames, name)
+						taintedLocalNames = append(taintedLocalNames, importLocalName(imp, i))
 					}
 				}
 				if len(taintedLocalNames) == 0 {
@@ -679,14 +680,14 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 					}
 				} else {
 					// All imported names are tainted — find symbols that use them
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
 					// Check if any imported names are directly re-exported
 					for _, exp := range analysis.Exports {
 						if exp.Source == "" {
-							for _, name := range imp.Names {
+							for _, name := range importLocalNames(imp) {
 								cleanName := name
 								if strings.HasPrefix(cleanName, "*:") {
 									cleanName = strings.TrimPrefix(cleanName, "*:")
@@ -1031,6 +1032,26 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 	return result, nil
 }
 
+// importLocalName returns the local binding name for the i-th imported name,
+// falling back to the source-side name when LocalNames is absent (e.g. older
+// Import entries). For `import { X as Y }`, imp.Names[i] is "X" and the local
+// name is "Y" — usage scans must look for the local name in the file body.
+func importLocalName(imp tsparse.Import, i int) string {
+	if i < len(imp.LocalNames) {
+		return imp.LocalNames[i]
+	}
+	return imp.Names[i]
+}
+
+// importLocalNames returns the local binding names for an import, used when
+// scanning a file body for usage of the imported symbols.
+func importLocalNames(imp tsparse.Import) []string {
+	if len(imp.LocalNames) == len(imp.Names) {
+		return imp.LocalNames
+	}
+	return imp.Names
+}
+
 func findTaintedSymbolsByUsage(analysis *tsparse.FileAnalysis, taintedNames []string) []string {
 	if analysis.SourceFile == nil || len(taintedNames) == 0 {
 		return nil
@@ -1268,12 +1289,13 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 				continue
 			}
 			var localNames, origNames []string
-			for _, name := range imp.Names {
+			for i, name := range imp.Names {
+				local := importLocalName(imp, i)
 				if strings.HasPrefix(name, "*:") {
-					localNames = append(localNames, name)
+					localNames = append(localNames, local)
 					origNames = append(origNames, "*")
 				} else {
-					localNames = append(localNames, name)
+					localNames = append(localNames, local)
 					origNames = append(origNames, name)
 				}
 			}
@@ -1411,11 +1433,11 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					continue
 				}
 				var taintedLocalNames []string
-				for _, name := range imp.Names {
+				for i, name := range imp.Names {
 					if strings.HasPrefix(name, "*:") {
-						taintedLocalNames = append(taintedLocalNames, name)
+						taintedLocalNames = append(taintedLocalNames, importLocalName(imp, i))
 					} else if affectedNames[name] {
-						taintedLocalNames = append(taintedLocalNames, name)
+						taintedLocalNames = append(taintedLocalNames, importLocalName(imp, i))
 					}
 				}
 				if len(taintedLocalNames) > 0 {
@@ -1454,7 +1476,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					}
 					log.Debugf("    %s: all symbols tainted via external dep %s (unassigned import)", stem, imp.Source)
 				} else {
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
@@ -1499,7 +1521,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					tainted[stem] = make(map[string]bool)
 				}
 				if isCSSModule(imp.Source) && len(imp.Names) > 0 {
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}
@@ -1545,7 +1567,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					tainted[stem] = make(map[string]bool)
 				}
 				if len(imp.Names) > 0 {
-					usageTainted := findTaintedSymbolsByUsage(analysis, imp.Names)
+					usageTainted := findTaintedSymbolsByUsage(analysis, importLocalNames(imp))
 					for _, s := range usageTainted {
 						tainted[stem][s] = true
 					}

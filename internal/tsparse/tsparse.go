@@ -11,8 +11,13 @@ import (
 )
 
 type Import struct {
-	Names  []string // imported names, or ["*:alias"] for namespace import
-	Source string   // module specifier (e.g., "./Button/Button.js")
+	Names  []string // imported (source-side) names, or ["*:alias"] for namespace import
+	// LocalNames holds the local binding name for each entry in Names (parallel slice).
+	// For a plain `import { X }` LocalNames[i] == Names[i]; for an aliased
+	// `import { X as Y }` Names[i] is "X" (what the source exports) and
+	// LocalNames[i] is "Y" (what this file references in its body).
+	LocalNames []string
+	Source     string // module specifier (e.g., "./Button/Button.js")
 }
 
 type Export struct {
@@ -128,22 +133,33 @@ func extractImports(stmt *ast.Node, analysis *FileAnalysis) {
 	imp := stmt.AsImportDeclaration()
 	source := strings.Trim(imp.ModuleSpecifier.Text(), "\"'`")
 
-	var names []string
+	var names, localNames []string
 	if imp.ImportClause != nil {
 		clause := imp.ImportClause.AsImportClause()
 		if clause.Name() != nil {
-			names = append(names, clause.Name().Text())
+			n := clause.Name().Text()
+			names = append(names, n)
+			localNames = append(localNames, n)
 		}
 		if clause.NamedBindings != nil {
 			if ast.IsNamespaceImport(clause.NamedBindings) {
 				ns := clause.NamedBindings.AsNamespaceImport()
 				names = append(names, "*:"+ns.Name().Text())
+				localNames = append(localNames, "*:"+ns.Name().Text())
 			} else if ast.IsNamedImports(clause.NamedBindings) {
 				ni := clause.NamedBindings.AsNamedImports()
 				if ni.Elements != nil {
 					for _, spec := range ni.Elements.Nodes {
 						is := spec.AsImportSpecifier()
-						names = append(names, is.Name().Text())
+						// is.Name() is the local binding; is.PropertyName (when present)
+						// is the original name exported by the source module.
+						local := is.Name().Text()
+						orig := local
+						if is.PropertyName != nil {
+							orig = is.PropertyName.Text()
+						}
+						names = append(names, orig)
+						localNames = append(localNames, local)
 					}
 				}
 			}
@@ -151,8 +167,9 @@ func extractImports(stmt *ast.Node, analysis *FileAnalysis) {
 	}
 
 	analysis.Imports = append(analysis.Imports, Import{
-		Names:  names,
-		Source: source,
+		Names:      names,
+		LocalNames: localNames,
+		Source:     source,
 	})
 }
 
@@ -422,8 +439,9 @@ func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 							}
 							if len(names) > 0 {
 								analysis.Imports = append(analysis.Imports, Import{
-									Names:  names,
-									Source: specifier,
+									Names:      names,
+									LocalNames: names,
+									Source:     specifier,
 								})
 							}
 						}
@@ -493,8 +511,9 @@ func extractDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 			nameList = append(nameList, n)
 		}
 		analysis.Imports = append(analysis.Imports, Import{
-			Names:  nameList,
-			Source: specifier,
+			Names:      nameList,
+			LocalNames: nameList,
+			Source:     specifier,
 		})
 	}
 
@@ -580,8 +599,9 @@ func extractThenDynamicImports(sf *ast.SourceFile, analysis *FileAnalysis) {
 							names := extractNamesFromThenCallback(ce.Arguments.Nodes[0])
 							if len(names) > 0 {
 								analysis.Imports = append(analysis.Imports, Import{
-									Names:  names,
-									Source: specifier,
+									Names:      names,
+									LocalNames: names,
+									Source:     specifier,
 								})
 								staticSources[specifier] = true
 							}
