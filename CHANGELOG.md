@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.2] - 2026-06-01
+
+### Fixed
+- Targets that reference an `app` (e.g. e2e targets with `"app": "gdc-analytical-designer"`) are now triggered when that app is affected via a changed dependency. When `TARGETS` was set, the relevant-package set was seeded only from each matched target's own package and its transitive dependencies — but a target's `app` is a logical relationship, not an npm dependency, so the app and its dependency subtree (e.g. the runtime library whose change is meant to trigger the e2e target) were excluded from analysis, produced no taint, and the app-taint check always came up empty. The seed set now also includes `td.App` (unless `IGNORE_APP_RELATIONSHIP` is set), so the app and its dependencies are analyzed and the app-taint check fires.
+
 ## [0.21.1] - 2026-05-31
 
 ### Fixed
@@ -297,6 +302,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.21.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.21.1...v0.21.2
+[0.21.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.4...v0.20.0
 [0.19.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.19.3...v0.19.4
