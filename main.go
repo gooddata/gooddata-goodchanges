@@ -70,6 +70,7 @@ func main() {
 	flagLog = logLevel == "BASIC" || logLevel == "DEBUG"
 	flagDebug = logLevel == "DEBUG"
 
+	log.Basic = flagLog
 	log.Debug = flagDebug
 	analyzer.IncludeCSS = flagIncludeCSS
 
