@@ -140,85 +140,9 @@ func collectExportsFromFile(projectFolder, relFile string, seen, visited map[str
 	}
 }
 
-// HasTaintedImports checks if any source file in the given folder imports
-// tainted symbols from the upstreamTaint map. Used for app-like packages
-// (e.g. e2e scenario apps) where we don't need to trace to entrypoint exports,
-// just detect whether any tainted dependency is actually imported.
-func HasTaintedImports(folder string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.ProjectConfig) bool {
-	log.Debugf("HasTaintedImports: %s (upstream taint keys: %d)", folder, len(upstreamTaint))
-	if len(upstreamTaint) == 0 {
-		return false
-	}
-	allFiles, err := globSourceFiles(folder)
-	if err != nil {
-		return false
-	}
-	for _, relPath := range allFiles {
-		if ignoreCfg.IsIgnored(relPath) {
-			continue
-		}
-		fullPath := filepath.Join(folder, relPath)
-		analysis, err := tsparse.ParseFile(fullPath)
-		if err != nil {
-			continue
-		}
-		for _, imp := range analysis.Imports {
-			if strings.HasPrefix(imp.Source, ".") {
-				continue
-			}
-			// Check exact match first (normal TS exports)
-			affectedNames, ok := upstreamTaint[imp.Source]
-			if !ok || len(affectedNames) == 0 {
-				// Check prefix match for CSS taint (e.g. import "@gooddata/pkg/styles/css/main.css"
-				// matches taint key "@gooddata/pkg/styles")
-				if IncludeCSS && matchesCSSTaint(imp.Source, upstreamTaint) {
-					log.Debugf("  HasTaintedImports: %s matched CSS taint via %s", folder, imp.Source)
-					return true
-				}
-				continue
-			}
-			if len(imp.Names) == 0 {
-				// Unassigned import from tainted package
-				log.Debugf("  HasTaintedImports: %s matched via unassigned import of %s in %s", folder, imp.Source, relPath)
-				return true
-			}
-			for _, name := range imp.Names {
-				if strings.HasPrefix(name, "*:") {
-					// Namespace import — any taint means affected
-					log.Debugf("  HasTaintedImports: %s matched via namespace import of %s in %s", folder, imp.Source, relPath)
-					return true
-				}
-				if affectedNames[name] {
-					log.Debugf("  HasTaintedImports: %s matched via %s importing %s from %s", folder, relPath, name, imp.Source)
-					return true
-				}
-			}
-		}
-	}
-
-	// Also check SCSS files for @use of tainted style packages
-	if IncludeCSS {
-		scssFiles := globStyleFiles(folder)
-		for _, scssFile := range scssFiles {
-			if ignoreCfg.IsIgnored(scssFile) {
-				continue
-			}
-			uses := parseScssUses(filepath.Join(folder, scssFile))
-			for _, useSpec := range uses {
-				if matchesCSSTaint(useSpec, upstreamTaint) {
-					log.Debugf("  HasTaintedImports: %s matched CSS taint via SCSS @use %s", folder, useSpec)
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// HasTaintedImportsForGlob is like HasTaintedImports but scopes to files matching
-// a glob pattern (relative to projectFolder) instead of a flat directory.
-// Ignores override glob matches.
+// HasTaintedImportsForGlob checks whether any source file matching a glob
+// pattern (relative to projectFolder) imports tainted symbols from the
+// upstreamTaint map. Ignores override glob matches.
 func HasTaintedImportsForGlob(projectFolder, globPattern string, upstreamTaint map[string]map[string]bool, ignoreCfg *rush.ProjectConfig) bool {
 	log.Debugf("HasTaintedImportsForGlob: %s (glob=%s, upstream taint keys: %d)", projectFolder, globPattern, len(upstreamTaint))
 	if len(upstreamTaint) == 0 {

@@ -119,7 +119,6 @@ func (cd ChangeDir) IsFineGrained() bool {
 }
 
 type TargetDef struct {
-	App        *string     `json:"app,omitempty"`        // rush project name of corresponding app
 	TargetName *string     `json:"targetName,omitempty"` // custom output name (defaults to package name)
 	ChangeDirs []ChangeDir `json:"changeDirs,omitempty"` // globs to watch (defaults to **/* if empty)
 	Ignores    []string    `json:"ignores,omitempty"`    // per-target ignore globs (additive with global)
