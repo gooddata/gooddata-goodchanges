@@ -10,7 +10,7 @@ var Debug bool
 
 func Basicf(format string, args ...interface{}) {
 	if Basic {
-		fmt.Fprintf(os.Stderr, format, args...)
+		fmt.Fprintf(os.Stderr, "[BASIC] "+format+"\n", args...)
 	}
 }
 
