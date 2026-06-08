@@ -226,6 +226,28 @@ func main() {
 		}
 	}
 
+	// CSS/SCSS taint propagation: when --include-css is set, any changed CSS/SCSS
+	// file in a library taints all style imports from that library in downstream packages.
+	// This runs BEFORE library analysis so the __css__ closure is available while seeding
+	// taint: a library whose TS entrypoint side-effect-imports a style file that @use's a
+	// CSS-tainted package inherits taint on its JS exports, which then propagates through
+	// the normal bottom-up TS import graph into JS consumers (Pattern A — JS-bundled CSS).
+	if flagIncludeCSS {
+		cssTaintedPkgs := analyzer.FindCSSTaintedPackages(changedFiles, rushConfig, projectMap)
+		for pkgName := range cssTaintedPkgs {
+			key := analyzer.CSSTaintPrefix + pkgName
+			if allUpstreamTaint[key] == nil {
+				allUpstreamTaint[key] = make(map[string]bool)
+			}
+			allUpstreamTaint[key]["*"] = true
+			if flagDebug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] CSS taint: %s\n", pkgName)
+			}
+		}
+		// Propagate CSS taint through SCSS @use chains across libraries
+		analyzer.PropagateCSSTaint(rushConfig, projectMap, allUpstreamTaint)
+	}
+
 	type pkgResult struct {
 		pkgName  string
 		affected []analyzer.AffectedExport
@@ -314,7 +336,13 @@ func main() {
 			pkgUpstreamTaint := make(map[string]map[string]bool)
 			for _, dep := range info.DependsOn {
 				for specifier, names := range allUpstreamTaint {
-					if strings.HasPrefix(specifier, dep) {
+					matches := strings.HasPrefix(specifier, dep)
+					if !matches && strings.HasPrefix(specifier, analyzer.CSSTaintPrefix) {
+						// CSS taint keys are namespaced ("__css__:pkg"); match on the package name
+						// so a dep's CSS taint is visible while analysing this package's style @use chains.
+						matches = strings.HasPrefix(strings.TrimPrefix(specifier, analyzer.CSSTaintPrefix), dep)
+					}
+					if matches {
 						if pkgUpstreamTaint[specifier] == nil {
 							pkgUpstreamTaint[specifier] = make(map[string]bool)
 						}
@@ -364,24 +392,6 @@ func main() {
 			}
 			log.Basicf("")
 		}
-	}
-
-	// CSS/SCSS taint propagation: when --include-css is set, any changed CSS/SCSS
-	// file in a library taints all style imports from that library in downstream packages.
-	if flagIncludeCSS {
-		cssTaintedPkgs := analyzer.FindCSSTaintedPackages(changedFiles, rushConfig, projectMap)
-		for pkgName := range cssTaintedPkgs {
-			key := analyzer.CSSTaintPrefix + pkgName
-			if allUpstreamTaint[key] == nil {
-				allUpstreamTaint[key] = make(map[string]bool)
-			}
-			allUpstreamTaint[key]["*"] = true
-			if flagDebug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] CSS taint: %s\n", pkgName)
-			}
-		}
-		// Propagate CSS taint through SCSS @use chains across libraries
-		analyzer.PropagateCSSTaint(rushConfig, projectMap, allUpstreamTaint)
 	}
 
 	// Detect affected targets from .goodchangesrc.json configs.
