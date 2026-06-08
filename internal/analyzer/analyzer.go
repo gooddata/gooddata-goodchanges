@@ -427,10 +427,34 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 		}
 	}
 
-	// Seed taint from changed CSS/SCSS files within this package.
+	// Determine the full set of tainted style files in this package. A style file is
+	// tainted if it was directly changed, or if it @use's the styles of a CSS-tainted
+	// upstream package (Pattern A — JS-bundled CSS). A TS file that side-effect-imports
+	// a tainted style file then inherits taint on its exported symbols, so the change
+	// rides through the normal TS import graph into JS consumers of this package.
+	taintedStyleFiles := make(map[string]bool)
+	for f := range changedStyleFiles {
+		taintedStyleFiles[f] = true
+	}
+	if IncludeCSS && len(upstreamTaint) > 0 {
+		for _, styleFile := range globStyleFiles(projectFolder) {
+			if taintedStyleFiles[styleFile] {
+				continue
+			}
+			for _, useSpec := range parseScssUses(filepath.Join(projectFolder, styleFile)) {
+				if matchesCSSTaint(useSpec, upstreamTaint) {
+					taintedStyleFiles[styleFile] = true
+					log.Debugf("    %s: style file tainted via @use of %s", styleFile, useSpec)
+					break
+				}
+			}
+		}
+	}
+
+	// Seed taint from tainted CSS/SCSS files within this package.
 	// For CSS module imports (*.module.scss/css) with named bindings, only taint symbols
 	// that use the imported binding. For all other style imports, taint all symbols.
-	if len(changedStyleFiles) > 0 {
+	if len(taintedStyleFiles) > 0 {
 		for stem, analysis := range fileAnalyses {
 			for _, imp := range analysis.Imports {
 				if !strings.HasPrefix(imp.Source, ".") {
@@ -442,7 +466,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				fileDir := filepath.Dir(stem + ".ts")
 				resolved := filepath.Join(fileDir, imp.Source)
 				resolved = filepath.Clean(resolved)
-				if !changedStyleFiles[resolved] {
+				if !taintedStyleFiles[resolved] {
 					continue
 				}
 				if tainted[stem] == nil {

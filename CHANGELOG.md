@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-06-08
+
+### Added
+- CSS/SCSS taint now bridges into JS imports for the "JS-bundled CSS" pattern (most `libs/gdc-*`). Previously, a changed SCSS file propagated through cross-library `@use` chains (e.g. `gdc-dashboards-runtime/src/styles/app.scss` `@use`s `@gooddata/sdk-ui-dashboard`) but the taint lived in a separate `__css__:` namespace that was only matched against *style* imports. A consumer that pulls the styles in purely via a JavaScript import — `import { Root } from "gdc-dashboards-runtime"`, where `Root.tsx` does `import "./styles/app.scss"` — never matched, so prod-affecting CSS changes failed to trigger app targets like `gdc-dashboards`. Now, while analysing each library (with `INCLUDE_CSS=1`), a local style file is treated as tainted if it `@use`s the styles of a CSS-tainted upstream package; any TS file that side-effect-imports that style file inherits taint on its exported symbols, which then rides the normal TS import graph into JS consumers. The `__css__` closure is computed before library analysis (and threaded through the per-package upstream-taint filter) so it is available during seeding. This implements Stage 3 of `properly-support-tree-shaken-scss-or-scss-modules.md`; `package.json` `sideEffects` gating is still to come.
+
 ## [0.23.0] - 2026-06-07
 
 ### Removed
@@ -317,6 +322,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.21.3...v0.22.0
 [0.21.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.21.2...v0.21.3
