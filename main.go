@@ -25,7 +25,6 @@ var version string
 
 var flagIncludeTypes bool
 var flagIncludeCSS bool
-var flagIgnoreAppRelationship bool
 var flagLog bool
 var flagDebug bool
 
@@ -64,7 +63,6 @@ func main() {
 
 	flagIncludeTypes = envBool("INCLUDE_TYPES")
 	flagIncludeCSS = envBool("INCLUDE_CSS")
-	flagIgnoreAppRelationship = envBool("IGNORE_APP_RELATIONSHIP")
 
 	logLevel := strings.ToUpper(os.Getenv("LOG_LEVEL"))
 	flagLog = logLevel == "BASIC" || logLevel == "DEBUG"
@@ -136,15 +134,6 @@ func main() {
 					continue
 				}
 				targetSeeds = append(targetSeeds, rp.PackageName)
-				// Targets that reference an `app` are triggered when that app is
-				// affected (see the app-taint check below). The app is not an npm
-				// dependency of the target's own package, so seed it explicitly —
-				// otherwise the app and its dependency subtree (e.g. the runtime
-				// library whose change is meant to trigger the e2e target) would be
-				// excluded from analysis and never produce taint.
-				if td.App != nil && !flagIgnoreAppRelationship {
-					targetSeeds = append(targetSeeds, *td.App)
-				}
 			}
 		}
 		relevantPackages = rush.FindTransitiveDependencies(projectMap, targetSeeds)
@@ -432,25 +421,6 @@ func main() {
 			if len(depChangedDeps[rp.ProjectFolder]) > 0 {
 				changedE2E[name] = &TargetResult{Name: name}
 				continue
-			}
-
-			// Quick check: app taint
-			if td.App != nil && !flagIgnoreAppRelationship {
-				appInfo := projectMap[*td.App]
-				if appInfo != nil {
-					if changedProjects[*td.App] != nil {
-						changedE2E[name] = &TargetResult{Name: name}
-						continue
-					}
-					if len(depChangedDeps[appInfo.ProjectFolder]) > 0 {
-						changedE2E[name] = &TargetResult{Name: name}
-						continue
-					}
-					if analyzer.HasTaintedImports(appInfo.ProjectFolder, allUpstreamTaint, nil) {
-						changedE2E[name] = &TargetResult{Name: name}
-						continue
-					}
-				}
 			}
 
 			// ChangeDirs detection (defaults to **/* if not configured)

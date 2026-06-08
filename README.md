@@ -38,7 +38,7 @@ goodchanges --version    # print version
 5. Computes the full affected subgraph (transitive dependents)
 6. Topologically sorts affected packages (dependencies first)
 7. For each **library**: parses old and new TypeScript ASTs, diffs symbols, and propagates taint through import graphs
-8. For each **target**: checks if it's affected via direct changes, lockfile changes, tainted imports, or a tainted corresponding app
+8. For each **target**: checks if it's affected via direct changes, lockfile changes, or tainted imports
 9. Outputs a JSON array of affected e2e package names to stdout
 
 ## Output
@@ -65,7 +65,6 @@ JSON array of target objects:
 | `COMPARE_COMMIT`          | Specific git commit hash to compare against (overrides branch-based comparison)                                                                                | _(empty)_       |
 | `COMPARE_BRANCH`          | Git branch to compute merge base against                                                                                                                       | `origin/master` |
 | `TARGETS`                 | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`).                                          | _(all targets)_ |
-| `IGNORE_APP_RELATIONSHIP` | When set to any non-empty value, ignores the `app` field in target configs. Targets are no longer triggered solely because their corresponding app is tainted. | _(disabled)_    |
 
 ## Library vs app detection
 
@@ -88,9 +87,6 @@ Each project can optionally have a `.goodchangesrc.json` file in its root direct
 ```json
 {
   "targets": [
-    {
-      "app": "@gooddata/gdc-dashboards"
-    },
     {
       "targetName": "neobackstop",
       "changeDirs": [
@@ -127,7 +123,6 @@ Each target is triggered by any of these conditions:
 1. **Direct file changes** -- files matching `changeDirs` globs changed (excluding ignored paths). Defaults to `**/*` (entire project) when `changeDirs` is not set.
 2. **External dependency changes** -- a dependency version changed in `pnpm-lock.yaml`
 3. **Tainted workspace imports** -- a file matching `changeDirs` globs imports a tainted symbol from a workspace library
-4. **Corresponding app is tainted** -- the app specified by `app` is affected (any of the above conditions). Disabled when `IGNORE_APP_RELATIONSHIP` env var is set.
 
 ### changeDirs
 
@@ -165,7 +160,6 @@ Each `changeDirs` entry is an object with:
 
 | Field        | Type          | Description                                                                                                                                 |
 |--------------|---------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `app`        | `string`      | Package name of the corresponding app this target tests                                                                                     |
 | `targetName` | `string`      | Custom output name (defaults to the package name when not set)                                                                              |
 | `changeDirs` | `ChangeDir[]` | Glob patterns to match files. Defaults to `**/*` (entire project). Each entry: `{"glob": "...", "filter?": "...", "type?": "fine-grained"}` |
 | `ignores`    | `string[]`    | Per-target ignore globs. Additive with the global `ignores` -- only applies to this target's detection                                      |
