@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1] - 2026-07-21
+
+### Fixed
+- Affected **apps** now propagate taint to packages that import them. When a package is not a library, its per-symbol export analysis is skipped — but it was also seeding no taint at all, so the taint chain died at the app boundary. A consumer importing from an affected app (e.g. a thin harness that dynamically imports its app package: `() => import("gdc-analytical-designer-module")`) saw a clean upstream-taint map and was never flagged, so app/harness targets sitting behind an intermediate app went undetected. Now an affected app is tainted **wholesale**: all of its entrypoint exports are seeded into the upstream-taint map (mirroring the existing global-`changeDirs` full-taint seeding for libraries), so downstream importers match via the normal import graph — including bare/dynamic side-effect imports (empty import names), which match on any non-empty symbol set for the package. Example: a change in `gdc-analytical-designer-runtime` now correctly reaches `gdc-analytical-designer-harness` through the intermediate `gdc-analytical-designer-module` app.
+
 ## [0.24.0] - 2026-06-08
 
 ### Added

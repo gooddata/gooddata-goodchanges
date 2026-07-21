@@ -282,7 +282,42 @@ func main() {
 			}
 
 			if !lib {
-				log.Basicf("  Type: app (not a library) — skipping export analysis\n")
+				log.Basicf("  Type: app (not a library) — skipping export analysis")
+				// Every package reaching this loop is affected (directly, via a
+				// lockfile dep, or transitively via the workspace graph). An app gets
+				// no per-symbol export diffing, but it is tainted wholesale: anything
+				// importing from it must be treated as tainted too (e.g. an app
+				// mounted by a thin harness that dynamically imports it). Seed ALL of
+				// the app's entrypoint exports, mirroring the global-changeDirs
+				// full-taint seeding used for libraries below. Downstream importers
+				// then match these in HasTaintedImportsForGlob / FindAffectedFiles —
+				// including bare/dynamic side-effect imports, which match on any
+				// non-empty symbol set for the package.
+				entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
+				totalExports := 0
+				for _, ep := range entrypoints {
+					specifier := pkgName
+					if ep.ExportPath != "." {
+						specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
+					}
+					exports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
+					if allUpstreamTaint[specifier] == nil {
+						allUpstreamTaint[specifier] = make(map[string]bool)
+					}
+					for _, name := range exports {
+						allUpstreamTaint[specifier][name] = true
+					}
+					// A side-effect-only entrypoint enumerates zero exports, which would
+					// leave an empty (== untainted) set and stop propagation to bare/dynamic
+					// importers. Fall back to the "*" whole-package marker (as used for
+					// version-changed and CSS-tainted packages) so the app still taints
+					// wholesale.
+					if len(exports) == 0 {
+						allUpstreamTaint[specifier]["*"] = true
+					}
+					totalExports += len(exports)
+				}
+				log.Basicf("  App is affected — tainting all %d exports across %d entrypoint(s) (whole-app taint)\n", totalExports, len(entrypoints))
 				continue
 			}
 
