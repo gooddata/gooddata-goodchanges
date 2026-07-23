@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.6] - 2026-07-23
+
+### Changed
+- Upgrade vendored typescript-go to [`8457ea62d288`](https://github.com/microsoft/typescript-go/commit/8457ea62d288195bcaff8fec0767c704dd7dd9a9)
+
 ## [0.24.5] - 2026-07-23
 
 ### Changed
@@ -347,6 +352,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.5...v0.24.6
 [0.24.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.4...v0.24.5
 [0.24.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.3...v0.24.4
 [0.24.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.2...v0.24.3
