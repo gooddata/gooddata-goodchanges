@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.10] - 2026-07-30
+
+### Fixed
+- Symbol-level AST diff no longer marks an unchanged declaration as changed when a *neighboring* declaration is edited or removed. Each symbol's body text was extracted starting at `stmt.Pos()`, which in the TS AST includes the symbol's **leading trivia** (the preceding comments and blank lines). Deleting a sibling — or otherwise changing what comes before a symbol — re-attaches the intervening comment (e.g. a `// SECTION` header) to the next symbol, so its extracted body differed between the old and new versions and it was reported as a runtime change. That false "change" then spread through the intra-file reference graph and out via the library's exports, over-tainting downstream consumers. Symbol start lines are now taken from the first real token (`scanner.SkipTrivia`), excluding leading comments/blank lines from the compared body. Example: removing three unused `createSelector` exports from `bootstrap_selector.ts` previously tainted nine untouched sibling selectors (and everything reachable from them); it now taints none.
+
 ## [0.24.9] - 2026-07-30
 
 ### Changed
@@ -367,6 +372,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.10]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.9...v0.24.10
 [0.24.9]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.8...v0.24.9
 [0.24.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.7...v0.24.8
 [0.24.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.6...v0.24.7
