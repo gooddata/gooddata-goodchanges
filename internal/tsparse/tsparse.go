@@ -8,6 +8,7 @@ import (
 	"goodchanges/tsgo-vendor/pkg/ast"
 	"goodchanges/tsgo-vendor/pkg/core"
 	"goodchanges/tsgo-vendor/pkg/parser"
+	"goodchanges/tsgo-vendor/pkg/scanner"
 )
 
 type Import struct {
@@ -266,9 +267,20 @@ func extractExports(stmt *ast.Node, analysis *FileAnalysis) {
 	}
 }
 
+// stmtStartLine returns the 1-based line of a statement's first real token,
+// skipping leading trivia (comments and blank lines). Using stmt.Pos() directly
+// would put StartLine at the start of the leading comment/blank-line block, so
+// that block rides along in the symbol's extracted body text. Deleting or editing
+// a *preceding* sibling then re-attaches its trailing comment to this symbol and
+// spuriously marks this (unchanged) symbol as changed in the AST diff.
+func stmtStartLine(stmt *ast.Node, text string, lineMap []core.TextPos) int {
+	return posToLine(scanner.SkipTrivia(text, stmt.Pos()), lineMap)
+}
+
 func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileAnalysis) {
 	isExported := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsExport)
 	isDefault := ast.HasSyntacticModifier(stmt, ast.ModifierFlagsDefault)
+	text := analysis.SourceFile.Text()
 
 	switch stmt.Kind {
 	case ast.KindFunctionDeclaration:
@@ -284,7 +296,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 				Name:       name,
 				Kind:       "function",
-				StartLine:  posToLine(stmt.Pos(), lineMap),
+				StartLine:  stmtStartLine(stmt, text, lineMap),
 				EndLine:    posToLine(stmt.End(), lineMap),
 				IsExported: isExported,
 				ExportName: exportName,
@@ -303,7 +315,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 				Name:       name,
 				Kind:       "class",
-				StartLine:  posToLine(stmt.Pos(), lineMap),
+				StartLine:  stmtStartLine(stmt, text, lineMap),
 				EndLine:    posToLine(stmt.End(), lineMap),
 				IsExported: isExported,
 				ExportName: exportName,
@@ -315,7 +327,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 				Name:       name,
 				Kind:       "interface",
-				StartLine:  posToLine(stmt.Pos(), lineMap),
+				StartLine:  stmtStartLine(stmt, text, lineMap),
 				EndLine:    posToLine(stmt.End(), lineMap),
 				IsExported: isExported,
 				ExportName: name,
@@ -328,7 +340,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 				Name:       name,
 				Kind:       "type",
-				StartLine:  posToLine(stmt.Pos(), lineMap),
+				StartLine:  stmtStartLine(stmt, text, lineMap),
 				EndLine:    posToLine(stmt.End(), lineMap),
 				IsExported: isExported,
 				ExportName: name,
@@ -341,7 +353,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 				Name:       name,
 				Kind:       "enum",
-				StartLine:  posToLine(stmt.Pos(), lineMap),
+				StartLine:  stmtStartLine(stmt, text, lineMap),
 				EndLine:    posToLine(stmt.End(), lineMap),
 				IsExported: isExported,
 				ExportName: name,
@@ -358,7 +370,7 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 						analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 							Name:       name,
 							Kind:       "variable",
-							StartLine:  posToLine(stmt.Pos(), lineMap),
+							StartLine:  stmtStartLine(stmt, text, lineMap),
 							EndLine:    posToLine(stmt.End(), lineMap),
 							IsExported: isExported,
 							ExportName: name,
