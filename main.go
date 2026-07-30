@@ -283,16 +283,30 @@ func main() {
 
 			if !lib {
 				log.Basicf("  Type: app (not a library) — skipping export analysis")
-				// Every package reaching this loop is affected (directly, via a
-				// lockfile dep, or transitively via the workspace graph). An app gets
-				// no per-symbol export diffing, but it is tainted wholesale: anything
-				// importing from it must be treated as tainted too (e.g. an app
-				// mounted by a thin harness that dynamically imports it). Seed ALL of
-				// the app's entrypoint exports, mirroring the global-changeDirs
-				// full-taint seeding used for libraries below. Downstream importers
-				// then match these in HasTaintedImportsForGlob / FindAffectedFiles —
-				// including bare/dynamic side-effect imports, which match on any
-				// non-empty symbol set for the package.
+				// An app gets no per-symbol export diffing; when it IS affected it is
+				// tainted wholesale (anything importing from it — e.g. a thin harness
+				// that dynamically imports it — must be treated as tainted too). But
+				// being merely reachable in the affected set is not enough: a transitive
+				// dependent whose upstream change touched nothing this app actually
+				// imports must NOT be tainted, or every downstream harness/host target
+				// gets flagged for unrelated changes. So gate the seed on the same
+				// conditions the app's own target detection uses: directly changed
+				// (has changed files), a changed lockfile dep, or an actual tainted
+				// import from upstream.
+				appAffected := directlyChanged || isDepAffected
+				if !appAffected {
+					appUpstreamTaint := buildPkgUpstreamTaint(info.DependsOn, allUpstreamTaint)
+					appAffected = analyzer.HasTaintedImportsForGlob(info.ProjectFolder, "**/*", appUpstreamTaint, configMap[info.ProjectFolder])
+				}
+				if !appAffected {
+					log.Basicf("  App not affected by this change (no changed files, no tainted imports) — not tainting\n")
+					continue
+				}
+				// Seed ALL of the app's entrypoint exports, mirroring the global-changeDirs
+				// full-taint seeding used for libraries below. Downstream importers then
+				// match these in HasTaintedImportsForGlob / FindAffectedFiles — including
+				// bare/dynamic side-effect imports, which match on any non-empty symbol
+				// set for the package.
 				entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
 				totalExports := 0
 				for _, ep := range entrypoints {
@@ -368,25 +382,7 @@ func main() {
 
 			// Build upstream taint for this package from its dependencies.
 			// allUpstreamTaint is only read here — writes happen after the level completes.
-			pkgUpstreamTaint := make(map[string]map[string]bool)
-			for _, dep := range info.DependsOn {
-				for specifier, names := range allUpstreamTaint {
-					matches := strings.HasPrefix(specifier, dep)
-					if !matches && strings.HasPrefix(specifier, analyzer.CSSTaintPrefix) {
-						// CSS taint keys are namespaced ("__css__:pkg"); match on the package name
-						// so a dep's CSS taint is visible while analysing this package's style @use chains.
-						matches = strings.HasPrefix(strings.TrimPrefix(specifier, analyzer.CSSTaintPrefix), dep)
-					}
-					if matches {
-						if pkgUpstreamTaint[specifier] == nil {
-							pkgUpstreamTaint[specifier] = make(map[string]bool)
-						}
-						for n := range names {
-							pkgUpstreamTaint[specifier][n] = true
-						}
-					}
-				}
-			}
+			pkgUpstreamTaint := buildPkgUpstreamTaint(info.DependsOn, allUpstreamTaint)
 
 			wg.Add(1)
 			go func(pkgName string, projectFolder string, entrypoints []analyzer.Entrypoint, pkgUpstreamTaint map[string]map[string]bool, changedDeps map[string]bool) {
@@ -603,6 +599,34 @@ func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[st
 // matchesTargetFilter checks if a target name matches any of the given patterns.
 // Patterns support * as a wildcard matching any characters (including /).
 // globalChangeDirTriggered checks if any changed file matches a global changeDir glob.
+// buildPkgUpstreamTaint filters the global taint map down to the entries that
+// belong to a package's direct dependencies — matching on specifier prefix, and
+// (for CSS-taint keys) on the package name inside the "__css__:" namespace. This
+// is the per-package upstream taint used both to analyse a library and to decide
+// whether an app actually imports any tainted upstream export.
+func buildPkgUpstreamTaint(dependsOn []string, allUpstreamTaint map[string]map[string]bool) map[string]map[string]bool {
+	pkgUpstreamTaint := make(map[string]map[string]bool)
+	for _, dep := range dependsOn {
+		for specifier, names := range allUpstreamTaint {
+			matches := strings.HasPrefix(specifier, dep)
+			if !matches && strings.HasPrefix(specifier, analyzer.CSSTaintPrefix) {
+				// CSS taint keys are namespaced ("__css__:pkg"); match on the package name
+				// so a dep's CSS taint is visible while analysing this package's style @use chains.
+				matches = strings.HasPrefix(strings.TrimPrefix(specifier, analyzer.CSSTaintPrefix), dep)
+			}
+			if matches {
+				if pkgUpstreamTaint[specifier] == nil {
+					pkgUpstreamTaint[specifier] = make(map[string]bool)
+				}
+				for n := range names {
+					pkgUpstreamTaint[specifier][n] = true
+				}
+			}
+		}
+	}
+	return pkgUpstreamTaint
+}
+
 func globalChangeDirTriggered(changeDirs []rush.ChangeDir, changedFiles []string, projectFolder string, cfg *rush.ProjectConfig) bool {
 	for _, cd := range changeDirs {
 		for _, f := range changedFiles {
