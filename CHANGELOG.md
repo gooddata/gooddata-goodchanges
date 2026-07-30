@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.9] - 2026-07-30
+
+### Changed
+- Renamed the `LOG_LEVEL=BASIC`/`DEBUG` summary line `Affected e2e packages (N):` to `Affected targets (N):`. The list has always contained resolved `.goodchangesrc.json` targets (unit-test targets, app/harness targets, etc.), not just e2e packages, so the label now reflects its actual contents. Log wording only — the JSON result on stdout is unchanged.
+
 ## [0.24.8] - 2026-07-23
 
 ### Changed
@@ -362,6 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.9]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.8...v0.24.9
 [0.24.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.7...v0.24.8
 [0.24.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.6...v0.24.7
 [0.24.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.5...v0.24.6

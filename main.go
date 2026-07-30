@@ -535,7 +535,7 @@ func main() {
 	})
 
 	if flagLog {
-		log.Basicf("Affected e2e packages (%d):", len(e2eList))
+		log.Basicf("Affected targets (%d):", len(e2eList))
 		for _, result := range e2eList {
 			if len(result.Detections) > 0 {
 				log.Basicf("  - %s (fine-grained: %d files)", result.Name, len(result.Detections))
