@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.12] - 2026-07-30
+
+### Fixed
+- App taint propagation (added in 0.24.1) no longer over-flags downstream targets. An affected app was seeded into the upstream-taint map — tainting everything that imports it — whenever it was merely *reachable* in the affected set, i.e. a transitive dependent of any touched package. So a change to a library an app depends on flagged that app's harness/host consumers even when the change affected **no export the app actually imports** (e.g. removing unused exports from `gdc-analytical-designer-runtime` flagged `gdc-analytical-designer-harness`, `gdc-dashboards-harness`, and `gdc-host-application`). The wholesale-taint seed is now gated on the app being genuinely affected — the same conditions its own target detection uses: directly changed (has changed files), a changed lockfile dependency, or an actual tainted import from upstream (`HasTaintedImportsForGlob`). Apps that are only transitively reachable but import nothing that changed no longer propagate taint; real changes to exports an app imports still propagate as before. The per-package upstream-taint filter is also factored into a shared `buildPkgUpstreamTaint` helper used by both the library and app paths.
+
 ## [0.24.11] - 2026-07-30
 
 ### Changed
@@ -377,6 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.12]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.11...v0.24.12
 [0.24.11]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.10...v0.24.11
 [0.24.10]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.9...v0.24.10
 [0.24.9]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.8...v0.24.9
