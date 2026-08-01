@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.13] - 2026-08-01
+
+### Fixed
+- Destructuring variable declarations (`const { a, b } = expr` / `const [a, b] = expr`) are now decomposed into their individual bindings for both symbol and export extraction. Previously `getDeclName` only handled plain identifiers and returned `""` for binding patterns, so destructured names were registered as neither symbols nor exports — they simply didn't exist in the file model. That silently broke taint propagation through a very common pattern: e.g. `export const { store, startSagas, … } = createStore()` in `gdc-analytical-designer-runtime`'s `reduxStore.ts`. A runtime change to the reducers feeding `createStore` tainted `createStore`, but the taint could not reach `store`/`startSagas`/…, so the package reported **0 affected exports** and nothing propagated to the AD module/harness (or the dashboards harness that embeds it) — a false negative. Each destructured binding is now emitted as a symbol/export; renames (`{ a: b }` → `b`), rest elements (`...x`), nested patterns and array holes are handled. To stay precise, a binding's symbol span is the **initializer expression** (not the whole statement), so the sibling binding names don't bleed into the compared body and cross-link in the AST diff — each binding is attributed exactly to the initializer it destructures.
+
 ## [0.24.12] - 2026-07-30
 
 ### Fixed
@@ -382,6 +387,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.24.13]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.12...v0.24.13
 [0.24.12]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.11...v0.24.12
 [0.24.11]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.10...v0.24.11
 [0.24.10]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.9...v0.24.10
