@@ -236,14 +236,26 @@ func extractExports(stmt *ast.Node, analysis *FileAnalysis) {
 					dl := vs.DeclarationList.AsVariableDeclarationList()
 					if dl.Declarations != nil {
 						for _, decl := range dl.Declarations.Nodes {
-							name := getDeclName(decl)
-							if name != "" {
+							if name := getDeclName(decl); name != "" {
 								exportName := name
 								if isDefault {
 									exportName = "default"
 								}
 								analysis.Exports = append(analysis.Exports, Export{
 									Name:      exportName,
+									LocalName: name,
+								})
+								continue
+							}
+							// Destructuring export: `export const { a, b } = init` binds each
+							// name locally; record them all (destructuring can't be `default`).
+							declName := decl.Name()
+							if declName == nil || !(ast.IsObjectBindingPattern(declName) || ast.IsArrayBindingPattern(declName)) {
+								continue
+							}
+							for _, name := range bindingPatternNames(declName) {
+								analysis.Exports = append(analysis.Exports, Export{
+									Name:      name,
 									LocalName: name,
 								})
 							}
@@ -365,13 +377,36 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 			dl := vs.DeclarationList.AsVariableDeclarationList()
 			if dl.Declarations != nil {
 				for _, decl := range dl.Declarations.Nodes {
-					name := getDeclName(decl)
-					if name != "" {
+					if name := getDeclName(decl); name != "" {
 						analysis.Symbols = append(analysis.Symbols, SymbolDecl{
 							Name:       name,
 							Kind:       "variable",
 							StartLine:  stmtStartLine(stmt, text, lineMap),
 							EndLine:    posToLine(stmt.End(), lineMap),
+							IsExported: isExported,
+							ExportName: name,
+						})
+						continue
+					}
+					// Destructuring: `const { a, b } = init`. Attribute each bound name to
+					// the shared initializer expression's line span — NOT the whole statement,
+					// which would drag the sibling binding names into the body and cross-link
+					// them in the AST diff. Each binding genuinely depends on `init`.
+					declName := decl.Name()
+					if declName == nil || !(ast.IsObjectBindingPattern(declName) || ast.IsArrayBindingPattern(declName)) {
+						continue
+					}
+					startLine, endLine := declInitLines(decl, text, lineMap)
+					if startLine == 0 {
+						startLine = stmtStartLine(stmt, text, lineMap)
+						endLine = posToLine(stmt.End(), lineMap)
+					}
+					for _, name := range bindingPatternNames(declName) {
+						analysis.Symbols = append(analysis.Symbols, SymbolDecl{
+							Name:       name,
+							Kind:       "variable",
+							StartLine:  startLine,
+							EndLine:    endLine,
 							IsExported: isExported,
 							ExportName: name,
 						})
@@ -391,6 +426,47 @@ func getDeclName(node *ast.Node) string {
 		return name.Text()
 	}
 	return ""
+}
+
+// bindingPatternNames returns every local identifier bound by an object/array
+// destructuring pattern, following renames (`{ a: b }` yields `b`), rest
+// elements (`...x`) and nested patterns; array holes (omitted elements) are
+// skipped.
+func bindingPatternNames(pattern *ast.Node) []string {
+	bp := pattern.AsBindingPattern()
+	if bp.Elements == nil {
+		return nil
+	}
+	var names []string
+	for _, elem := range bp.Elements.Nodes {
+		if !ast.IsBindingElement(elem) {
+			continue // array hole (OmittedExpression)
+		}
+		en := elem.AsBindingElement().Name()
+		if en == nil {
+			continue
+		}
+		switch {
+		case ast.IsIdentifier(en):
+			names = append(names, en.Text())
+		case ast.IsObjectBindingPattern(en) || ast.IsArrayBindingPattern(en):
+			names = append(names, bindingPatternNames(en)...)
+		}
+	}
+	return names
+}
+
+// declInitLines returns the 1-based [start, end] line span of a variable
+// declaration's initializer expression (leading trivia skipped). Returns (0, 0)
+// when the declaration has no initializer.
+func declInitLines(decl *ast.Node, text string, lineMap []core.TextPos) (int, int) {
+	vd := decl.AsVariableDeclaration()
+	if vd.Initializer == nil {
+		return 0, 0
+	}
+	start := posToLine(scanner.SkipTrivia(text, vd.Initializer.Pos()), lineMap)
+	end := posToLine(vd.Initializer.End(), lineMap)
+	return start, end
 }
 
 // extractDynamicImports walks the full AST to find dynamic import() calls
