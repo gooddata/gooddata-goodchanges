@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-08-03
+
+### Changed
+- Destructured bindings are now attributed **element-wise** when the initializer is an array or object literal, refining the whole-initializer attribution added in 0.24.13. Previously every binding in `const [a, b] = [tainted(), safe()]` (or `const { a, b } = { a: tainted(), b: safe() }`) shared the entire initializer's span, so a change touching only one element tainted *all* the bindings — a false positive. Each binding is now mapped to its corresponding element (by index for array literals, by key for object literals, following nested patterns), and only falls back to the shared initializer span when mapping can't be done statically: a non-literal initializer (a call/identifier/member access — e.g. `createStore()`, where all bindings genuinely share the dependency), rest bindings (`...rest`), spreads, computed keys, or out-of-range indices. Net effect: `a` depends on `tainted()` and `b` on `safe()`, so a change to `safe()` no longer flags consumers of `a`.
+
 ## [0.24.13] - 2026-08-01
 
 ### Fixed
@@ -387,6 +392,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.13...v0.25.0
 [0.24.13]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.12...v0.24.13
 [0.24.12]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.11...v0.24.12
 [0.24.11]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.10...v0.24.11

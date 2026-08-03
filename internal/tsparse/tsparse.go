@@ -388,27 +388,26 @@ func extractDeclarations(stmt *ast.Node, lineMap []core.TextPos, analysis *FileA
 						})
 						continue
 					}
-					// Destructuring: `const { a, b } = init`. Attribute each bound name to
-					// the shared initializer expression's line span — NOT the whole statement,
-					// which would drag the sibling binding names into the body and cross-link
-					// them in the AST diff. Each binding genuinely depends on `init`.
-					declName := decl.Name()
-					if declName == nil || !(ast.IsObjectBindingPattern(declName) || ast.IsArrayBindingPattern(declName)) {
-						continue
-					}
-					startLine, endLine := declInitLines(decl, text, lineMap)
-					if startLine == 0 {
-						startLine = stmtStartLine(stmt, text, lineMap)
-						endLine = posToLine(stmt.End(), lineMap)
-					}
-					for _, name := range bindingPatternNames(declName) {
+					// Destructuring: `const { a, b } = init` / `const [a, b] = init`.
+					// Attribute each binding to the specific initializer element/property it
+					// destructures (element-wise for array/object *literals*), falling back to
+					// the whole initializer expression otherwise. Using the element rather than
+					// the whole statement keeps sibling binding names out of the compared body
+					// (no AST-diff cross-linking) and avoids tainting a binding via an unrelated
+					// element's dependency.
+					for _, b := range destructuredBindings(decl, text, lineMap) {
+						startLine, endLine := b.startLine, b.endLine
+						if startLine == 0 {
+							startLine = stmtStartLine(stmt, text, lineMap)
+							endLine = posToLine(stmt.End(), lineMap)
+						}
 						analysis.Symbols = append(analysis.Symbols, SymbolDecl{
-							Name:       name,
+							Name:       b.name,
 							Kind:       "variable",
 							StartLine:  startLine,
 							EndLine:    endLine,
 							IsExported: isExported,
-							ExportName: name,
+							ExportName: b.name,
 						})
 					}
 				}
@@ -467,6 +466,165 @@ func declInitLines(decl *ast.Node, text string, lineMap []core.TextPos) (int, in
 	start := posToLine(scanner.SkipTrivia(text, vd.Initializer.Pos()), lineMap)
 	end := posToLine(vd.Initializer.End(), lineMap)
 	return start, end
+}
+
+// boundBinding is a single identifier bound by a destructuring declaration,
+// paired with the line span of the initializer element/property it depends on.
+type boundBinding struct {
+	name      string
+	startLine int
+	endLine   int
+}
+
+// destructuredBindings decomposes a destructuring variable declaration into its
+// bound identifiers, each paired with the line span it depends on. When the
+// initializer is an array/object literal that maps cleanly (no spread, no
+// computed keys), each binding is attributed to its corresponding element or
+// property, and nested patterns recurse into the matched element. Anything that
+// cannot be mapped positionally/by key — rest bindings, spreads, computed keys,
+// a non-literal initializer, out-of-range indices — falls back to the enclosing
+// initializer span (startLine 0 if there is no initializer), so those bindings
+// conservatively share its dependencies.
+func destructuredBindings(decl *ast.Node, text string, lineMap []core.TextPos) []boundBinding {
+	vd := decl.AsVariableDeclaration()
+	name := vd.Name()
+	if name == nil || !(ast.IsObjectBindingPattern(name) || ast.IsArrayBindingPattern(name)) {
+		return nil
+	}
+	fbStart, fbEnd := declInitLines(decl, text, lineMap)
+	var out []boundBinding
+	collectBindings(name, vd.Initializer, fbStart, fbEnd, text, lineMap, &out)
+	return out
+}
+
+func collectBindings(pattern *ast.Node, init *ast.Node, fbStart, fbEnd int, text string, lineMap []core.TextPos, out *[]boundBinding) {
+	bp := pattern.AsBindingPattern()
+	if bp.Elements == nil {
+		return
+	}
+	isArray := ast.IsArrayBindingPattern(pattern)
+
+	// Try to map the initializer element-wise. Only a literal of the matching
+	// kind, with no spread/computed keys, is cleanly mappable.
+	var arrElems []*ast.Node
+	var objVals map[string]*ast.Node
+	mappable := false
+	if init != nil {
+		if isArray && ast.IsArrayLiteralExpression(init) {
+			arrElems, mappable = arrayLiteralElements(init)
+		} else if !isArray && ast.IsObjectLiteralExpression(init) {
+			objVals, mappable = objectLiteralValues(init)
+		}
+	}
+
+	idx := 0
+	for _, elem := range bp.Elements.Nodes {
+		if !ast.IsBindingElement(elem) {
+			idx++ // array elision in the pattern still consumes a slot
+			continue
+		}
+		be := elem.AsBindingElement()
+
+		// Resolve the source expression + span for this binding.
+		var src *ast.Node
+		start, end := fbStart, fbEnd
+		if be.DotDotDotToken == nil && mappable {
+			if isArray {
+				if idx < len(arrElems) {
+					src = arrElems[idx]
+				}
+			} else if key := bindingSourceKey(be); key != "" {
+				src = objVals[key]
+			}
+			if src != nil && !ast.IsOmittedExpression(src) {
+				start = posToLine(scanner.SkipTrivia(text, src.Pos()), lineMap)
+				end = posToLine(src.End(), lineMap)
+			}
+		}
+		idx++
+
+		en := be.Name()
+		if en == nil {
+			continue
+		}
+		switch {
+		case ast.IsIdentifier(en):
+			*out = append(*out, boundBinding{en.Text(), start, end})
+		case ast.IsObjectBindingPattern(en) || ast.IsArrayBindingPattern(en):
+			collectBindings(en, src, start, end, text, lineMap, out)
+		}
+	}
+}
+
+// arrayLiteralElements returns an array literal's element expressions, and false
+// if the literal contains a spread (`...x`), which shifts positions and breaks
+// index-based mapping.
+func arrayLiteralElements(arr *ast.Node) ([]*ast.Node, bool) {
+	ale := arr.AsArrayLiteralExpression()
+	if ale.Elements == nil {
+		return nil, true
+	}
+	for _, e := range ale.Elements.Nodes {
+		if ast.IsSpreadElement(e) {
+			return nil, false
+		}
+	}
+	return ale.Elements.Nodes, true
+}
+
+// objectLiteralValues maps an object literal's static keys to their value
+// expressions, and returns false if any property is a spread, method/accessor,
+// or computed key — cases where a binding's source can't be matched by name.
+func objectLiteralValues(obj *ast.Node) (map[string]*ast.Node, bool) {
+	ole := obj.AsObjectLiteralExpression()
+	if ole.Properties == nil {
+		return map[string]*ast.Node{}, true
+	}
+	m := make(map[string]*ast.Node, len(ole.Properties.Nodes))
+	for _, p := range ole.Properties.Nodes {
+		switch {
+		case ast.IsPropertyAssignment(p):
+			key := propNameText(p.Name())
+			if key == "" {
+				return nil, false
+			}
+			m[key] = p.AsPropertyAssignment().Initializer
+		case ast.IsShorthandPropertyAssignment(p):
+			n := p.Name()
+			if n == nil || !ast.IsIdentifier(n) {
+				return nil, false
+			}
+			m[n.Text()] = n // value is the shorthand identifier itself
+		default:
+			return nil, false
+		}
+	}
+	return m, true
+}
+
+// bindingSourceKey returns the object-literal key an object-pattern binding
+// element reads from: its property name (`{ a: b }` → "a"), else the local
+// shorthand name (`{ a }` → "a").
+func bindingSourceKey(be *ast.BindingElement) string {
+	if be.PropertyName != nil {
+		return propNameText(be.PropertyName)
+	}
+	if n := be.Name(); n != nil && ast.IsIdentifier(n) {
+		return n.Text()
+	}
+	return ""
+}
+
+// propNameText returns the static text of a property name, or "" for computed /
+// private names that can't be matched statically.
+func propNameText(n *ast.Node) string {
+	if n == nil {
+		return ""
+	}
+	if ast.IsIdentifier(n) || ast.IsStringLiteral(n) || ast.IsNumericLiteral(n) {
+		return n.Text()
+	}
+	return ""
 }
 
 // extractDynamicImports walks the full AST to find dynamic import() calls
