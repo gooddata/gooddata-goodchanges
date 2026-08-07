@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1] - 2026-08-07
+
+### Fixed
+- Destructuring **default initializers** are now included in a binding's taint span. A binding's default (`const { a = compute() } = obj`, `const [a = fallbackVal] = arr`) is a real second dependency — it supplies the value when the destructured slot is `undefined` — but it lives on the pattern (LHS), disjoint from the mapped source (RHS), so the element-wise span recorded in 0.25.0 covered only the source and excluded the default. A symbol used *only* inside such a default therefore escaped `findTaintedSymbolsByUsage` — a false negative. The binding's span is now widened to cover the default expression as well as its mapped source. (Narrow in scope: only bites when a tainted symbol appears solely in a binding default and nowhere else in the file, but false negatives are always worth closing.)
+
 ## [0.25.0] - 2026-08-03
 
 ### Changed
@@ -392,6 +397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.13...v0.25.0
 [0.24.13]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.12...v0.24.13
 [0.24.12]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.11...v0.24.12
