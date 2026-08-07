@@ -107,16 +107,27 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		affected = append(affected, sym.Name)
 	}
 
-	// Log deleted symbols (in old but not in new)
+	// Deleted symbols (in old but not in new) are themselves a change: removing an
+	// export can break whoever imported it, so record the deleted names and let
+	// them propagate to importers. This keeps detection precise — a removed
+	// *unused* export taints nobody, instead of the empty-diff falling through to a
+	// whole-file taint downstream. Type-only deletions are ignored unless includeTypes.
+	var deleted []string
 	if oldAnalysis != nil {
 		newSymbolNames := make(map[string]bool)
 		for _, sym := range newAnalysis.Symbols {
 			newSymbolNames[sym.Name] = true
 		}
 		for _, sym := range oldAnalysis.Symbols {
-			if !newSymbolNames[sym.Name] {
-				log.Debugf("    %s: DELETED symbol", sym.Name)
+			if newSymbolNames[sym.Name] {
+				continue
 			}
+			if sym.IsTypeOnly && !includeTypes {
+				log.Debugf("    %s: DELETED type-only symbol (skipped, includeTypes=false)", sym.Name)
+				continue
+			}
+			log.Debugf("    %s: DELETED symbol", sym.Name)
+			deleted = append(deleted, sym.Name)
 		}
 	}
 
@@ -187,6 +198,12 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 			affected = append(affected, sym.Name)
 		}
 	}
+
+	// Removed symbols propagate to whoever imported them. Appended after the
+	// intra-file rebuild (which only walks NEW symbols and would drop them) and
+	// before the fallback below, so a change that is purely a deletion is carried
+	// by these names rather than misrouted into a whole-file side-effect taint.
+	affected = append(affected, deleted...)
 
 	// Fallback: if no symbols were detected but the file clearly changed,
 	// check if changes are outside any symbol (e.g. top-level side effects,

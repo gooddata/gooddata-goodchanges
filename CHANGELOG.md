@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.2] - 2026-08-07
+
+### Fixed
+- Removing an unused export no longer floods every importer with taint. A deleted symbol was logged but never recorded as a change, so the per-file AST diff returned *no affected symbols* — and in the fine-grained path (`FindAffectedFiles`) an empty diff falls through to tainting the **whole file** with `*`. Deleting one unused export from a widely-imported helper (e.g. `ERROR_MESSAGE` from `gdc-ldm-modeler-e2e`'s `playwright/helpers/selectors.ts`) therefore tainted every file that imported it, flagging all ~48 dependent specs. Deleted symbols are now recorded as changed and propagate by name, so a removed export taints exactly the files that imported *that* symbol: an unused one taints nobody, while a removed *used* export still flags its importers (no false negative). The deleted names are appended after intra-file propagation (which walks only surviving symbols) and before the whole-file side-effect fallback, so a deletion-only change is carried precisely instead of being widened.
+
 ## [0.25.1] - 2026-08-07
 
 ### Fixed
@@ -397,6 +402,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.13...v0.25.0
 [0.24.13]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.12...v0.24.13
