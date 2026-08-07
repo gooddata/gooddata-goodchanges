@@ -19,6 +19,7 @@ type Import struct {
 	// LocalNames[i] is "Y" (what this file references in its body).
 	LocalNames []string
 	Source     string // module specifier (e.g., "./Button/Button.js")
+	IsTypeOnly bool   // true for `import type { … }` / `import type X` (whole-statement type-only)
 }
 
 type Export struct {
@@ -135,8 +136,10 @@ func extractImports(stmt *ast.Node, analysis *FileAnalysis) {
 	source := strings.Trim(imp.ModuleSpecifier.Text(), "\"'`")
 
 	var names, localNames []string
+	typeOnly := false
 	if imp.ImportClause != nil {
 		clause := imp.ImportClause.AsImportClause()
+		typeOnly = clause.PhaseModifier == ast.KindTypeKeyword
 		if clause.Name() != nil {
 			n := clause.Name().Text()
 			names = append(names, n)
@@ -171,6 +174,7 @@ func extractImports(stmt *ast.Node, analysis *FileAnalysis) {
 		Names:      names,
 		LocalNames: localNames,
 		Source:     source,
+		IsTypeOnly: typeOnly,
 	})
 }
 

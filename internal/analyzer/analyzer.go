@@ -1327,25 +1327,26 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 		}
 		changedSymbols := findAffectedSymbolsByASTDiff(oldAnalysis, analysis, oldContent, includeTypes)
 		log.Debugf("  %s: affected symbols (AST diff): %v", stem, changedSymbols)
-		if tainted[stem] == nil {
-			tainted[stem] = make(map[string]bool)
-		}
 		if oldAnalysis == nil {
-			// New file: taint all symbols
+			// New file: taint all symbols (their behavior is entirely new).
 			log.Debugf("  %s: new file — tainting all symbols", stem)
+			tainted[stem] = make(map[string]bool)
 			for _, sym := range analysis.Symbols {
 				tainted[stem][sym.Name] = true
 			}
 			tainted[stem]["*"] = true
 		} else if len(changedSymbols) > 0 {
+			tainted[stem] = make(map[string]bool)
 			for _, s := range changedSymbols {
 				tainted[stem][s] = true
 			}
-		} else {
-			// File changed but no symbol-level diff detected (e.g. changes in
-			// test()/describe() blocks or other non-declaration code).
-			tainted[stem]["*"] = true
 		}
+		// else: the AST diff found nothing that affects consumers (comments,
+		// formatting, type-only, or reordered imports). Import-time side effects
+		// (top-level statements, bare `import "x"`) and re-pointed value imports are
+		// already surfaced as "*"/affected symbols by findAffectedSymbolsByASTDiff,
+		// so there is deliberately NO whole-file fallback here (the old blanket `*`
+		// over-tainted every importer on a comment-only or dead-code change).
 	}
 
 	// Seed from upstream workspace taint
