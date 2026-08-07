@@ -5,9 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.2] - 2026-08-07
+## [0.25.3] - 2026-08-07
 
 ### Fixed
+- Replaced the fine-grained path's whole-file `*` fallback with import-time-aware detection, so an empty symbol diff no longer floods every importer. Previously, when a changed file produced no symbol-level diff, `FindAffectedFiles` tainted the **entire file** with `*` — so a comment-only edit, a formatting change, a type-only change, or reordering imports in a widely-imported helper flagged all its consumers. That blanket is removed; a change now wildcards a file only when something that actually **runs at import time** changed:
+  - a top-level side-effect statement (`console.log(...)`, `describe(...)`, `test(...)`, etc.) — already detected via `hasSideEffectStmtChanges`;
+  - a bare side-effect import (`import "./x"`) added, removed, or re-pointed.
+- Named-import **re-pointing** is now handled precisely instead of via the blanket. When a binding keeps its name but resolves to a different module/export (`import { x } from "./a"` → `"./b"`, or `{ a as x }` → `{ b as x }`), its usages don't change textually and the symbol diff missed them; those usages are now tainted directly. Reordering imports and re-pointing a *type-only* import (`import type`, when `includeTypes` is off) correctly taint nothing. Import statement type-only-ness is now tracked on `tsparse.Import`.
+
+Together these keep genuine import-time changes flagged while eliminating the large false-positive class where a comment or dead-code edit to a shared file re-ran every dependent target.
 - Removing an unused export no longer floods every importer with taint. A deleted symbol was logged but never recorded as a change, so the per-file AST diff returned *no affected symbols* — and in the fine-grained path (`FindAffectedFiles`) an empty diff falls through to tainting the **whole file** with `*`. Deleting one unused export from a widely-imported helper (e.g. `ERROR_MESSAGE` from `gdc-ldm-modeler-e2e`'s `playwright/helpers/selectors.ts`) therefore tainted every file that imported it, flagging all ~48 dependent specs. Deleted symbols are now recorded as changed and propagate by name, so a removed export taints exactly the files that imported *that* symbol: an unused one taints nobody, while a removed *used* export still flags its importers (no false negative). The deleted names are appended after intra-file propagation (which walks only surviving symbols) and before the whole-file side-effect fallback, so a deletion-only change is carried precisely instead of being widened.
 
 ## [0.25.1] - 2026-08-07
@@ -402,6 +408,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.24.13...v0.25.0

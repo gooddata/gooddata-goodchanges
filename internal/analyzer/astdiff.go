@@ -131,6 +131,16 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		}
 	}
 
+	// Re-pointed value imports: a local binding keeps its name but now resolves to
+	// a different module/export (`import { x } from "./a"` → "./b", or
+	// `{ a as x }` → `{ b as x }`). The usages don't change textually, so the
+	// symbol diff above misses them — taint the symbols that use the re-pointed
+	// binding. (Type-only imports are excluded unless includeTypes.)
+	if repointed := repointedImportBindings(oldAnalysis, newAnalysis, includeTypes); len(repointed) > 0 {
+		log.Debugf("    re-pointed import bindings: %v", repointed)
+		affected = append(affected, findTaintedSymbolsByUsage(newAnalysis, repointed)...)
+	}
+
 	// Intra-file propagation: if symbol A changed and symbol B references A,
 	// then B is also affected. E.g. `UiPagedVirtualListNotWrapped` changed,
 	// `UiPagedVirtualList = memo(UiPagedVirtualListNotWrapped)` is also affected.
@@ -215,9 +225,13 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 		}
 		if normalizeWhitespace(oldText) != normalizeWhitespace(newText) {
 			// File changed but no symbol was affected — changes are outside symbols.
-			// Check if the changes include runtime side-effect statements.
-			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) {
-				log.Debugf("    file changed with RUNTIME side-effect statements — tainting all symbols")
+			// Wildcard only when something that RUNS at import time changed: a
+			// top-level side-effect statement, or a bare `import "x"` side-effect
+			// import. Comment / formatting / type-only / import-reordering changes
+			// fall through untainted.
+			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) ||
+				bareImportsChanged(oldAnalysis, newAnalysis) {
+				log.Debugf("    file changed with import-time side effects — tainting all symbols")
 				// Use "*" wildcard to mark all exports as affected.
 				// This handles barrel/entrypoint files that have no symbol declarations
 				// but whose runtime side effects affect all importers.
@@ -508,4 +522,76 @@ func isSideEffectStatement(stmt *ast.Node) bool {
 	default:
 		return true
 	}
+}
+
+// importBindingOrigins maps each local binding introduced by a value import to a
+// stable "origin" key (source + source-side name). Bare side-effect imports (no
+// bindings) and — unless includeTypes — `import type` statements are excluded.
+func importBindingOrigins(a *tsparse.FileAnalysis, includeTypes bool) map[string]string {
+	origins := make(map[string]string)
+	if a == nil {
+		return origins
+	}
+	for _, imp := range a.Imports {
+		if imp.IsTypeOnly && !includeTypes {
+			continue
+		}
+		for i, local := range imp.LocalNames {
+			src := ""
+			if i < len(imp.Names) {
+				src = imp.Names[i]
+			}
+			origins[local] = imp.Source + "\x00" + src
+		}
+	}
+	return origins
+}
+
+// repointedImportBindings returns local binding names present both before and
+// after the change that now resolve to a different module/export.
+func repointedImportBindings(oldA, newA *tsparse.FileAnalysis, includeTypes bool) []string {
+	if oldA == nil || newA == nil {
+		return nil
+	}
+	oldOrigins := importBindingOrigins(oldA, includeTypes)
+	newOrigins := importBindingOrigins(newA, includeTypes)
+	var repointed []string
+	for local, newOrigin := range newOrigins {
+		if oldOrigin, ok := oldOrigins[local]; ok && oldOrigin != newOrigin {
+			repointed = append(repointed, local)
+		}
+	}
+	return repointed
+}
+
+// bareImportSources returns the set of module specifiers imported purely for
+// their side effects (`import "./x"` — no bindings). These execute at import time.
+func bareImportSources(a *tsparse.FileAnalysis) map[string]bool {
+	sources := make(map[string]bool)
+	if a == nil {
+		return sources
+	}
+	for _, imp := range a.Imports {
+		if len(imp.Names) == 0 && len(imp.LocalNames) == 0 {
+			sources[imp.Source] = true
+		}
+	}
+	return sources
+}
+
+// bareImportsChanged reports whether the set of side-effect imports differs
+// between old and new (added, removed, or re-pointed) — an import-time behavior
+// change that warrants whole-file taint.
+func bareImportsChanged(oldA, newA *tsparse.FileAnalysis) bool {
+	oldSet := bareImportSources(oldA)
+	newSet := bareImportSources(newA)
+	if len(oldSet) != len(newSet) {
+		return true
+	}
+	for s := range newSet {
+		if !oldSet[s] {
+			return true
+		}
+	}
+	return false
 }
