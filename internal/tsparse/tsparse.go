@@ -543,6 +543,17 @@ func collectBindings(pattern *ast.Node, init *ast.Node, fbStart, fbEnd int, text
 		}
 		idx++
 
+		// A binding default (`= expr`) is a second dependency: its value is used
+		// when the destructured slot is undefined. It sits on the pattern (LHS),
+		// disjoint from the mapped source (RHS), so widen the span to cover both —
+		// otherwise a symbol used only inside a default would escape taint detection.
+		if be.Initializer != nil {
+			ds := posToLine(scanner.SkipTrivia(text, be.Initializer.Pos()), lineMap)
+			de := posToLine(be.Initializer.End(), lineMap)
+			start = minLine(start, ds)
+			end = maxLine(end, de)
+		}
+
 		en := be.Name()
 		if en == nil {
 			continue
@@ -625,6 +636,28 @@ func propNameText(n *ast.Node) string {
 		return n.Text()
 	}
 	return ""
+}
+
+// minLine / maxLine combine 1-based line numbers, treating 0 as "unset" so a
+// missing span doesn't collapse the union to line 0.
+func minLine(a, b int) int {
+	switch {
+	case a == 0:
+		return b
+	case b == 0:
+		return a
+	case a < b:
+		return a
+	default:
+		return b
+	}
+}
+
+func maxLine(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // extractDynamicImports walks the full AST to find dynamic import() calls
