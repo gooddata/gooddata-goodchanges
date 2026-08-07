@@ -164,7 +164,7 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 			bodyText := tsparse.ExtractTextForLines(newText, newLineMap, sym.StartLine, sym.EndLine)
 			deps := make(map[string]bool)
 			for _, other := range newAnalysis.Symbols {
-				if other.Name != sym.Name && strings.Contains(bodyText, other.Name) {
+				if other.Name != sym.Name && containsIdentifier(bodyText, other.Name) {
 					deps[other.Name] = true
 				}
 			}
@@ -562,6 +562,51 @@ func repointedImportBindings(oldA, newA *tsparse.FileAnalysis, includeTypes bool
 		}
 	}
 	return repointed
+}
+
+// containsIdentifier reports whether name occurs in text as a whole identifier
+// token — flanked by non-identifier characters — rather than as a substring of a
+// larger identifier. This prevents false taint links like `chooseAction` matching
+// inside `chooseActionByIndex`. Names that are not plain identifiers (e.g. the "*"
+// wildcard or "*:ns" namespace markers) fall back to a raw substring test.
+func containsIdentifier(text, name string) bool {
+	if name == "" {
+		return false
+	}
+	if !isPlainIdentifier(name) {
+		return strings.Contains(text, name)
+	}
+	for from := 0; ; {
+		i := strings.Index(text[from:], name)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(name)
+		beforeOK := start == 0 || !isIdentByte(text[start-1])
+		afterOK := end == len(text) || !isIdentByte(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+func isPlainIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isIdentByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' || b == '$' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // bareImportSources returns the set of module specifiers imported purely for

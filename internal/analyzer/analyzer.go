@@ -705,7 +705,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				}
 				bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
 				for tName := range names {
-					if strings.Contains(bodyText, tName) {
+					if containsIdentifier(bodyText, tName) {
 						names[sym.Name] = true
 						changed = true
 						log.Debugf("  %s: %s tainted via intra-file dep on %s (seed propagation)", stem, sym.Name, tName)
@@ -834,7 +834,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 						}
 						bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
 						for tName := range taintedSet {
-							if strings.Contains(bodyText, tName) {
+							if containsIdentifier(bodyText, tName) {
 								taintedSet[sym.Name] = true
 								newlyTainted = append(newlyTainted, sym.Name)
 								changed = true
@@ -1021,7 +1021,7 @@ func findTaintedSymbolsByUsage(analysis *tsparse.FileAnalysis, taintedNames []st
 	for _, sym := range analysis.Symbols {
 		bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
 		for tName := range taintSet {
-			if strings.Contains(bodyText, tName) {
+			if containsIdentifier(bodyText, tName) {
 				result = append(result, sym.Name)
 				break
 			}
@@ -1558,7 +1558,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 				}
 				bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
 				for tName := range names {
-					if strings.Contains(bodyText, tName) {
+					if containsIdentifier(bodyText, tName) {
 						names[sym.Name] = true
 						changed = true
 						log.Debugf("  %s: %s tainted via intra-file dep on %s (seed propagation)", stem, sym.Name, tName)
@@ -1673,7 +1673,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 						}
 						bodyText := tsparse.ExtractTextForLines(sourceText, lineMap, sym.StartLine, sym.EndLine)
 						for tName := range taintedSet {
-							if strings.Contains(bodyText, tName) {
+							if containsIdentifier(bodyText, tName) {
 								taintedSet[sym.Name] = true
 								newlyTainted = append(newlyTainted, sym.Name)
 								changed = true
