@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.4] - 2026-08-07
+
+### Fixed
+- Intra-file taint propagation now matches symbol names as whole identifiers instead of raw substrings. The dependency/usage checks used `strings.Contains(body, name)`, so a symbol whose name is a **substring** of another was falsely linked — e.g. removing the unused `chooseAction` tainted the surviving, used `chooseActionByIndex` (its body "contains" the string `chooseAction`), which then propagated to a spec and flagged `gdc-dashboards-e2e` for a dead-code deletion. All six propagation sites (`astdiff.go` intra-file graph, plus the seed/importer/usage propagation in `analyzer.go`) now require the name to appear flanked by non-identifier characters (`[A-Za-z0-9_$]`) via a shared `containsIdentifier` helper; non-identifier tokens like the `*` wildcard keep the substring behaviour. Strictly more precise (it only drops matches that were substrings inside a larger identifier — never a real usage), so no false negatives.
+
 ## [0.25.3] - 2026-08-07
 
 ### Fixed
@@ -408,6 +413,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.0...v0.25.1
