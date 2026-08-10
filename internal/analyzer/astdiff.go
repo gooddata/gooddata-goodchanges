@@ -9,6 +9,14 @@ import (
 	"goodchanges/tsgo-vendor/pkg/scanner"
 )
 
+// sideEffectTaint is a sentinel taint token marking that a file has an *import-time
+// side effect* change (a changed top-level side-effect statement, or a bare
+// `import "x"` side-effect import) — as opposed to an ordinary whole-file "*" taint
+// (e.g. a new file). It propagates through import/re-export edges so a barrel that
+// re-exports a side-effectful module becomes side-effectful itself. It is not a
+// valid JS identifier, so it can never collide with or be matched as a real symbol.
+const sideEffectTaint = "__side-effect__"
+
 // findAffectedSymbolsByASTDiff compares OLD and NEW file ASTs to find which symbols changed.
 // Returns symbol names that have runtime changes (or type-only changes if includeTypes is true).
 //
@@ -232,10 +240,11 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) ||
 				bareImportsChanged(oldAnalysis, newAnalysis) {
 				log.Debugf("    file changed with import-time side effects — tainting all symbols")
-				// Use "*" wildcard to mark all exports as affected.
-				// This handles barrel/entrypoint files that have no symbol declarations
-				// but whose runtime side effects affect all importers.
-				affected = append(affected, "*")
+				// Use "*" wildcard to mark all exports as affected, plus the
+				// sideEffectTaint sentinel so the *import-time* nature propagates
+				// through import/re-export edges (a barrel importing this becomes
+				// side-effectful too).
+				affected = append(affected, "*", sideEffectTaint)
 				for _, sym := range newAnalysis.Symbols {
 					if sym.IsTypeOnly && !includeTypes {
 						continue

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.5] - 2026-08-10
+
+### Fixed
+- Import-time side-effect taint now propagates **transitively** through import and re-export edges. A file whose change ran at import time (a changed top-level statement like `console.log(...)`, or a bare `import "x"`) tainted its *direct* importers, but the "runs at import time" quality was lost after one hop: a barrel that re-exports the side-effectful module (`export { … } from "./api/ai/ai.js"` in an entrypoint `index.ts`) only picked up the re-exported *symbols*, so consumers importing the barrel for *other* symbols were missed — e.g. a `console.log` added to `e2e-utils/src/api/ai/ai.ts` flagged only the 5 consumers of the `ai` exports instead of all 8 e2e-utils consumers (importing the barrel loads `ai.ts` and executes the statement regardless of which symbol is used). Such changes now carry a `__side-effect__` sentinel that flows through every import/re-export edge, marking each file it reaches as wholly tainted and itself side-effectful, so barrels become side-effectful and all their consumers are flagged — the same result as adding the statement to the entrypoint directly. This is deliberately assume-the-worst; a `TODO` in the propagation notes the follow-up to refine it using each package's `package.json` `"sideEffects"` field (a side-effect-free module is tree-shaken and should not propagate).
+
 ## [0.25.4] - 2026-08-07
 
 ### Fixed
@@ -413,6 +418,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.4...v0.25.5
 [0.25.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.1...v0.25.2

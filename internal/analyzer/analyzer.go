@@ -783,6 +783,23 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				}
 			}
 
+			// Import-time side-effect transitivity: if the imported module has an
+			// import-time side effect (sideEffectTaint), importing it re-runs that
+			// side effect here, so this file becomes side-effectful too — taint all
+			// its symbols and carry "*" + sideEffectTaint so it keeps flowing to this
+			// file's own importers/re-exporters (a barrel re-exporting a side-effectful
+			// module becomes side-effectful itself).
+			// TODO: make this precise using the "sideEffects" field in each package's
+			// package.json — a module marked side-effect-free is tree-shaken and not
+			// re-executed on import, so it should not propagate. Until then we assume
+			// the worst and propagate through every import/re-export edge. Follow-up.
+			if currentTainted[sideEffectTaint] {
+				for _, sym := range importerAnalysis.Symbols {
+					newlyTainted = append(newlyTainted, sym.Name)
+				}
+				newlyTainted = append(newlyTainted, "*", sideEffectTaint)
+			}
+
 			// Named imports: find symbols that use the tainted imports
 			if len(taintedLocalNames) > 0 {
 				usageTainted := findTaintedSymbolsByUsage(importerAnalysis, taintedLocalNames)
@@ -1622,6 +1639,18 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 				for _, sym := range importerAnalysis.Symbols {
 					newlyTainted = append(newlyTainted, sym.Name)
 				}
+			}
+
+			// Import-time side-effect transitivity — see the matching block in
+			// AnalyzeLibraryPackage. Importing a side-effectful module re-runs its
+			// side effect here, so this file becomes side-effectful too and keeps
+			// propagating it (assume-the-worst; refine later via package.json
+			// "sideEffects" — see that TODO).
+			if currentTainted[sideEffectTaint] {
+				for _, sym := range importerAnalysis.Symbols {
+					newlyTainted = append(newlyTainted, sym.Name)
+				}
+				newlyTainted = append(newlyTainted, "*", sideEffectTaint)
 			}
 
 			if len(taintedLocalNames) > 0 {
