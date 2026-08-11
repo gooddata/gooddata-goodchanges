@@ -223,35 +223,36 @@ func findAffectedSymbolsByASTDiff(oldAnalysis *tsparse.FileAnalysis, newAnalysis
 	// by these names rather than misrouted into a whole-file side-effect taint.
 	affected = append(affected, deleted...)
 
-	// Fallback: if no symbols were detected but the file clearly changed,
-	// check if changes are outside any symbol (e.g. top-level side effects,
-	// copyright comments). If there are runtime side-effect changes, taint all symbols.
-	if len(affected) == 0 && oldAnalysis != nil {
-		oldText := ""
-		if oldAnalysis.SourceFile != nil {
-			oldText = oldAnalysis.SourceFile.Text()
-		}
-		if normalizeWhitespace(oldText) != normalizeWhitespace(newText) {
-			// File changed but no symbol was affected — changes are outside symbols.
-			// Wildcard only when something that RUNS at import time changed: a
-			// top-level side-effect statement, or a bare `import "x"` side-effect
-			// import. Comment / formatting / type-only / import-reordering changes
-			// fall through untainted.
-			if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) ||
-				bareImportsChanged(oldAnalysis, newAnalysis) {
-				log.Debugf("    file changed with import-time side effects — tainting all symbols")
-				// Use "*" wildcard to mark all exports as affected, plus the
-				// sideEffectTaint sentinel so the *import-time* nature propagates
-				// through import/re-export edges (a barrel importing this becomes
-				// side-effectful too).
-				affected = append(affected, "*", sideEffectTaint)
-				for _, sym := range newAnalysis.Symbols {
-					if sym.IsTypeOnly && !includeTypes {
-						continue
-					}
-					affected = append(affected, sym.Name)
+	// Import-time side effects are checked INDEPENDENTLY of symbol-level changes:
+	// one diff can both edit an exported symbol and add/remove a top-level
+	// side-effect statement (console.log, describe(...)) or a bare `import "x"`.
+	// Gating this behind len(affected) == 0 dropped the "*"/sideEffectTaint in the
+	// mixed case, cutting off importers of other symbols and the transitive
+	// side-effect propagation. The checks compare only top-level side-effect
+	// statement text / bare-import sets, so a pure declaration edit does not
+	// trigger them — comment / formatting / type-only / import-reordering changes
+	// still fall through untainted.
+	if oldAnalysis != nil {
+		if hasSideEffectStmtChanges(oldAnalysis.SourceFile, newAnalysis.SourceFile) ||
+			bareImportsChanged(oldAnalysis, newAnalysis) {
+			log.Debugf("    file changed with import-time side effects — tainting all symbols")
+			// Use "*" wildcard to mark all exports as affected, plus the
+			// sideEffectTaint sentinel so the *import-time* nature propagates
+			// through import/re-export edges (a barrel importing this becomes
+			// side-effectful too).
+			affected = append(affected, "*", sideEffectTaint)
+			for _, sym := range newAnalysis.Symbols {
+				if sym.IsTypeOnly && !includeTypes {
+					continue
 				}
-			} else {
+				affected = append(affected, sym.Name)
+			}
+		} else if len(affected) == 0 {
+			oldText := ""
+			if oldAnalysis.SourceFile != nil {
+				oldText = oldAnalysis.SourceFile.Text()
+			}
+			if normalizeWhitespace(oldText) != normalizeWhitespace(newText) {
 				log.Debugf("    file changed but no symbols affected (comments/imports only)")
 			}
 		}
