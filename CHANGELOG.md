@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.7] - 2026-08-11
+
+### Fixed
+- Spec files that import a tainted symbol **directly from an upstream workspace package** are now detected. The fine-grained path taints files via `findTaintedSymbolsByUsage`, which only marks *declared* symbols — and spec files typically declare none (top-level `test()`/`describe()` calls aren't declarations). The dedicated leaf-file pass that exists for exactly this shape only follows **local** import edges, so a spec importing e.g. `deleteLLMProvider` from `"gdc-e2e-utils"` was never tainted: a change to that function flagged only packages whose specs reached it *indirectly through a local helper* (`gdc-analytical-designer-e2e`), while packages whose specs import it directly (`gdc-dashboards-e2e`, `gdc-catalog-e2e`, `gdc-host-application-e2e`) were silently missed. The upstream-workspace seeding now mirrors the leaf-file pass: when a file imports a tainted name and no declared symbol carries the usage, the file is marked wholesale (`*`); a bare upstream import in a declaration-less file gets the same marker. Packages whose specs reference a same-named *local* wrapper (e.g. `gdc-ldm-modeler-e2e`'s own `helpers/api/ai.js`) are correctly *not* flagged, and files whose usage does live in declared symbols keep the precise symbol-level taint.
+
 ## [0.25.6] - 2026-08-11
 
 ### Fixed
@@ -423,6 +428,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.6...v0.25.7
 [0.25.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.5...v0.25.6
 [0.25.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.4...v0.25.5
 [0.25.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.3...v0.25.4
