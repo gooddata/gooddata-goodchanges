@@ -1395,6 +1395,11 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 					for _, sym := range analysis.Symbols {
 						tainted[stem][sym.Name] = true
 					}
+					if len(analysis.Symbols) == 0 {
+						// Leaf file (e.g. a spec) with no declarations — mark wholesale
+						// so it still lands in the result set.
+						tainted[stem]["*"] = true
+					}
 					log.Debugf("    %s: all symbols tainted via unassigned import from %s", stem, imp.Source)
 					continue
 				}
@@ -1416,6 +1421,16 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 							tainted[stem][s] = true
 						}
 						log.Debugf("    %s: tainted via upstream %s (imports: %v → symbols: %v)", stem, imp.Source, taintedLocalNames, usageTainted)
+					} else if tainted[stem] == nil {
+						// The file imports a tainted name from an upstream package but no
+						// DECLARED symbol carries it — the usage lives in code that isn't a
+						// declaration (test()/describe() bodies, top-level statements).
+						// Spec files are the canonical case: they'd otherwise never be
+						// tainted, since the leaf-file pass below only follows LOCAL import
+						// edges. Mirror that pass's philosophy: importing a tainted name is
+						// itself the dependency — mark the file wholesale.
+						tainted[stem] = map[string]bool{"*": true}
+						log.Debugf("    %s: whole-file tainted via upstream %s (imports %v, no declared symbols carry them)", stem, imp.Source, taintedLocalNames)
 					}
 				}
 			}
