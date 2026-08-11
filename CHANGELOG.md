@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.6] - 2026-08-11
+
+### Fixed
+- Import-time side effects are now detected even when the same diff also changes symbols. The `hasSideEffectStmtChanges` / `bareImportsChanged` checks ran only as a fallback when the symbol-level AST diff came up empty (`len(affected) == 0`), so a single commit that both edited an exported symbol **and** added/removed a top-level side-effect statement (`console.log(...)`) or a bare `import "x"` produced only the symbol taint — the `"*"` wildcard and `__side-effect__` sentinel were dropped, cutting off consumers of the file's *other* exports and the transitive barrel propagation added in 0.25.5. The side-effect checks now run independently of symbol-level results and append `"*" + __side-effect__` (plus all non-type-only symbols) whenever either fires. No over-taint is reintroduced: the checks compare only top-level side-effect statement text and the bare-import set, so a pure declaration edit still doesn't trigger them, and comment / formatting / type-only / import-reordering changes still taint nothing.
+
 ## [0.25.5] - 2026-08-10
 
 ### Fixed
@@ -418,6 +423,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.5...v0.25.6
 [0.25.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.4...v0.25.5
 [0.25.4]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.2...v0.25.3
