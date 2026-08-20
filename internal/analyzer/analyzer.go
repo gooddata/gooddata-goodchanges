@@ -263,6 +263,11 @@ type importEdge struct {
 	localNames   []string
 	origNames    []string
 	isSideEffect bool // true for unassigned imports like import "./foo"
+	// isTypeOnly marks edges that exist only at the type level (`import type` /
+	// `export type { … } from`). Such statements are erased at compile time and
+	// never load the source module at runtime, so import-time side effects must
+	// not propagate through them.
+	isTypeOnly bool
 }
 
 // AnalyzeLibraryPackage builds a full internal file dependency graph,
@@ -337,6 +342,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				localNames:   localNames,
 				origNames:    origNames,
 				isSideEffect: len(imp.Names) == 0,
+				isTypeOnly:   imp.IsTypeOnly,
 			})
 		}
 
@@ -352,11 +358,17 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				continue
 			}
 			// Check if we already have an import edge to this source
-			// (to avoid duplicating edges when a file both imports and re-exports)
+			// (to avoid duplicating edges when a file both imports and re-exports).
+			// A RUNTIME re-export upgrades an existing type-only edge: the file may
+			// first hit `import type`/`export type` from the source and only later a
+			// runtime re-export — the connection as a whole is then runtime.
 			alreadyHasEdge := false
-			for _, edge := range importGraph[stem] {
+			for i, edge := range importGraph[stem] {
 				if edge.fromStem == resolvedStem {
 					alreadyHasEdge = true
+					if edge.isTypeOnly && !exp.IsTypeOnly {
+						importGraph[stem][i].isTypeOnly = false
+					}
 					break
 				}
 			}
@@ -377,6 +389,7 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 				fromStem:   resolvedStem,
 				localNames: localNames,
 				origNames:  origNames,
+				isTypeOnly: exp.IsTypeOnly,
 			})
 		}
 	}
@@ -747,10 +760,14 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 
 			// Check for side-effect (unassigned) imports and named imports from the tainted source
 			hasSideEffectImport := false
+			hasRuntimeEdge := false
 			var taintedLocalNames []string
 			for _, edge := range importGraph[importerStem] {
 				if edge.fromStem != currentStem {
 					continue
+				}
+				if !edge.isTypeOnly {
+					hasRuntimeEdge = true
 				}
 				if edge.isSideEffect {
 					hasSideEffectImport = true
@@ -792,8 +809,10 @@ func AnalyzeLibraryPackage(projectFolder string, entrypoints []Entrypoint, merge
 			// TODO: make this precise using the "sideEffects" field in each package's
 			// package.json — a module marked side-effect-free is tree-shaken and not
 			// re-executed on import, so it should not propagate. Until then we assume
-			// the worst and propagate through every import/re-export edge. Follow-up.
-			if currentTainted[sideEffectTaint] {
+			// the worst and propagate through every RUNTIME import/re-export edge.
+			// Type-only edges (`import type` / `export type … from`) are erased at
+			// compile time and never load the module, so they don't count. Follow-up.
+			if currentTainted[sideEffectTaint] && hasRuntimeEdge {
 				for _, sym := range importerAnalysis.Symbols {
 					newlyTainted = append(newlyTainted, sym.Name)
 				}
@@ -1269,6 +1288,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 				localNames:   localNames,
 				origNames:    origNames,
 				isSideEffect: len(imp.Names) == 0,
+				isTypeOnly:   imp.IsTypeOnly,
 			})
 		}
 		// Re-exports as import edges
@@ -1283,10 +1303,15 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			if _, ok := fileAnalyses[resolvedStem]; !ok {
 				continue
 			}
+			// A RUNTIME re-export upgrades an existing type-only edge — see the
+			// matching dedup in AnalyzeLibraryPackage's graph builder.
 			alreadyHasEdge := false
-			for _, edge := range localImportGraph[stem] {
+			for i, edge := range localImportGraph[stem] {
 				if edge.fromStem == resolvedStem {
 					alreadyHasEdge = true
+					if edge.isTypeOnly && !exp.IsTypeOnly {
+						localImportGraph[stem][i].isTypeOnly = false
+					}
 					break
 				}
 			}
@@ -1305,6 +1330,7 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 				fromStem:   resolvedStem,
 				localNames: localNames,
 				origNames:  origNames,
+				isTypeOnly: exp.IsTypeOnly,
 			})
 		}
 	}
@@ -1621,10 +1647,14 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			}
 
 			hasSideEffectImport := false
+			hasRuntimeEdge := false
 			var taintedLocalNames []string
 			for _, edge := range localImportGraph[importerStem] {
 				if edge.fromStem != currentStem {
 					continue
+				}
+				if !edge.isTypeOnly {
+					hasRuntimeEdge = true
 				}
 				if edge.isSideEffect {
 					hasSideEffectImport = true
@@ -1660,8 +1690,9 @@ func FindAffectedFiles(globPattern string, filterPattern string, upstreamTaint m
 			// AnalyzeLibraryPackage. Importing a side-effectful module re-runs its
 			// side effect here, so this file becomes side-effectful too and keeps
 			// propagating it (assume-the-worst; refine later via package.json
-			// "sideEffects" — see that TODO).
-			if currentTainted[sideEffectTaint] {
+			// "sideEffects" — see that TODO). Runtime edges only: type-only
+			// imports/re-exports are erased and never load the module.
+			if currentTainted[sideEffectTaint] && hasRuntimeEdge {
 				for _, sym := range importerAnalysis.Symbols {
 					newlyTainted = append(newlyTainted, sym.Name)
 				}

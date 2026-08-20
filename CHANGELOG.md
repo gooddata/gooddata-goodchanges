@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.8] - 2026-08-20
+
+### Fixed
+- Import-time side-effect taint no longer propagates through **type-only** import/re-export edges. `import type { T } from "./x"` and `export type { T } from "./x"` are erased at compile time and never load `./x` at runtime, but the dependency graph didn't distinguish them from runtime edges — so a barrel whose only link to a side-effectful module was a type-only re-export was wholesale-tainted (all runtime symbols + the `__side-effect__` sentinel) and kept cascading to its own consumers, flagging targets for changes their code can never execute. Import edges now carry the statement's type-only-ness (tracked on `tsparse.Import` since 0.25.3) and synthetic re-export edges carry the export's; the side-effect transitivity blocks in both propagation paths fire only when at least one **runtime** edge connects the importer to the side-effectful module. A runtime re-export correctly *upgrades* a previously-recorded type-only edge to the same source (the deduped edge is flipped, so `export type { T } from "./x"` followed by `export { f } from "./x"` still counts as a runtime connection). Ordinary named-symbol taint through type-only edges is unchanged (relevant for `INCLUDE_TYPES`); only the side-effect wildcard/sentinel flow is gated.
+
 ## [0.25.7] - 2026-08-11
 
 ### Fixed
@@ -428,6 +433,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.25.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.7...v0.25.8
 [0.25.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.6...v0.25.7
 [0.25.6]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.5...v0.25.6
 [0.25.5]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.4...v0.25.5
