@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-10-12
+
+### Changed
+- **The CLI is now command-based: `goodchanges <command> [flags]`.** Change detection moved from the bare `goodchanges` invocation to `goodchanges detect`, and every input it used to read from the environment is now a flag on that command: `TARGETS` → `--targets <list>`, `COMPARE_COMMIT` → `--compare-commit <commit>`, `COMPARE_BRANCH` → `--compare-branch <branch>`, `INCLUDE_CSS` → `--include-css`, `INCLUDE_TYPES` → `--include-types`, `LOG_LEVEL` → `--log-level <BASIC|DEBUG>`. Detection logic, output format and defaults are unchanged. Each command declares a schema (positional arity, flags, allowed values) that drives parsing, validation and `--help` from a single source of truth, so unknown flags, unexpected positional arguments, a boolean flag given a value, a missing flag value, a repeated non-repeatable flag or a value outside the allowed set all fail fast with a non-zero exit and a `<command>: <reason>` message on stderr instead of being silently ignored. `goodchanges --help` lists the commands; `goodchanges <command> --help` prints that command's flags. Everything after a bare `--` is positional. The Docker image's default command is `detect`, so a bare `docker run gooddata/gooddata-goodchanges` still runs change detection; pass another command to override. Internally, `main.go` is now a thin dispatcher and the detection orchestration lives in `cmd/detect`, with the shared parse/validate/help machinery in `internal/cli`.
+- `goodchanges version` prints the version. `-v` / `--version` keep working as top-level aliases.
+- `--log-level` values are matched exactly (`BASIC`, `DEBUG`); the previous `LOG_LEVEL` env var was upper-cased before comparison, so a lowercase `basic` no longer works.
+
+### Removed
+- The `TARGETS`, `COMPARE_COMMIT`, `COMPARE_BRANCH`, `INCLUDE_CSS`, `INCLUDE_TYPES` and `LOG_LEVEL` environment variables are no longer read. A bare `goodchanges` with no command prints usage and exits 1 rather than running detection.
+- The `--list` flag. Use `goodchanges list-projects` instead; the output is the same JSON project dump.
+
 ## [0.25.8] - 2026-08-20
 
 ### Fixed
@@ -39,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Named-import **re-pointing** is now handled precisely instead of via the blanket. When a binding keeps its name but resolves to a different module/export (`import { x } from "./a"` → `"./b"`, or `{ a as x }` → `{ b as x }`), its usages don't change textually and the symbol diff missed them; those usages are now tainted directly. Reordering imports and re-pointing a *type-only* import (`import type`, when `includeTypes` is off) correctly taint nothing. Import statement type-only-ness is now tracked on `tsparse.Import`.
 
 Together these keep genuine import-time changes flagged while eliminating the large false-positive class where a comment or dead-code edit to a shared file re-ran every dependent target.
+- Removing an unused export no longer floods every importer with taint. A deleted symbol was logged but never recorded as a change, so the per-file AST diff returned *no affected symbols* — and in the fine-grained path (`FindAffectedFiles`) an empty diff falls through to tainting the **whole file** with `*`. Deleting one unused export from a widely-imported helper (e.g. `ERROR_MESSAGE` from `gdc-ldm-modeler-e2e`'s `playwright/helpers/selectors.ts`) therefore tainted every file that imported it, flagging all ~48 dependent specs. Deleted symbols are now recorded as changed and propagate by name, so a removed export taints exactly the files that imported *that* symbol: an unused one taints nobody, while a removed *used* export still flags its importers (no false negative). The deleted names are appended after intra-file propagation (which walks only surviving symbols) and before the whole-file side-effect fallback, so a deletion-only change is carried precisely instead of being widened.
+
+## [0.25.2] - 2026-08-07
+
+### Fixed
 - Removing an unused export no longer floods every importer with taint. A deleted symbol was logged but never recorded as a change, so the per-file AST diff returned *no affected symbols* — and in the fine-grained path (`FindAffectedFiles`) an empty diff falls through to tainting the **whole file** with `*`. Deleting one unused export from a widely-imported helper (e.g. `ERROR_MESSAGE` from `gdc-ldm-modeler-e2e`'s `playwright/helpers/selectors.ts`) therefore tainted every file that imported it, flagging all ~48 dependent specs. Deleted symbols are now recorded as changed and propagate by name, so a removed export taints exactly the files that imported *that* symbol: an unused one taints nobody, while a removed *used* export still flags its importers (no false negative). The deleted names are appended after intra-file propagation (which walks only surviving symbols) and before the whole-file side-effect fallback, so a deletion-only change is carried precisely instead of being widened.
 
 ## [0.25.1] - 2026-08-07

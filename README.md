@@ -23,13 +23,46 @@ BINDIR=~/.local/bin ./install.sh v0.2.5
 
 ## Usage
 
+The CLI is command-based: `goodchanges <command> [flags]`.
+
 ```bash
-goodchanges              # run change detection, outputs JSON to stdout
-goodchanges -v           # print version
-goodchanges --version    # print version
+goodchanges detect [flags]     # run change detection, outputs JSON to stdout
+goodchanges list-projects      # print the rush project list as JSON
+goodchanges version            # print version (also: goodchanges -v / --version)
+
+goodchanges --help             # list commands
+goodchanges <command> --help   # a command's flags, generated from its schema
 ```
 
+Unknown flags and unexpected positional arguments fail fast with a non-zero
+exit code. Everything after a bare `--` is treated as positional.
+
+### detect
+
+Runs change detection against the rush monorepo in the current working
+directory and prints the affected targets as JSON on stdout.
+
+```bash
+goodchanges detect --include-css --compare-commit <sha> --targets 'gdc-dashboards-e2e,*backstop*'
+```
+
+| Flag                        | Description                                                                                                          | Default         |
+|-----------------------------|----------------------------------------------------------------------------------------------------------------------|-----------------|
+| `--targets <list>`          | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`) | _(all targets)_ |
+| `--compare-commit <commit>` | Specific git commit to compare against (overrides branch-based comparison)                                           | _(empty)_       |
+| `--compare-branch <branch>` | Git branch to compute merge base against                                                                             | `origin/master` |
+| `--include-css`             | Enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains                              | _(disabled)_    |
+| `--include-types`           | Includes type-only changes (interfaces, type aliases, type annotations) in taint propagation                         | _(disabled)_    |
+| `--log-level <level>`       | Logging verbosity on stderr. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing                     | _(no logging)_  |
+
+> Until v0.25.x these inputs were environment variables (`TARGETS`,
+> `COMPARE_COMMIT`, `COMPARE_BRANCH`, `INCLUDE_CSS`, `INCLUDE_TYPES`,
+> `LOG_LEVEL`) on a bare `goodchanges` invocation, and `list-projects` was
+> `goodchanges --list`. The env vars are no longer read.
+
 ## How it works
+
+`goodchanges detect`:
 
 1. Finds the merge base commit (comparison point)
 2. Gets the list of changed files
@@ -43,7 +76,7 @@ goodchanges --version    # print version
 
 ## Output
 
-JSON array of target objects:
+`detect` prints a JSON array of target objects on stdout:
 
 ```json
 [
@@ -54,17 +87,6 @@ JSON array of target objects:
 
 - Normal targets and fully-triggered virtual targets: `{"name": "..."}`
 - Virtual targets where only fine-grained directories detected changes: `{"name": "...", "detections": ["..."]}` with the specific affected file paths
-
-## Environment variables
-
-| Variable                  | Description                                                                                                                                                    | Default         |
-|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| `LOG_LEVEL`               | Logging verbosity. `BASIC` for standard logging, `DEBUG` for verbose AST/taint tracing to stderr                                                               | _(no logging)_  |
-| `INCLUDE_TYPES`           | When set to any non-empty value, includes type-only changes (interfaces, type aliases, type annotations) in taint propagation                                  | _(disabled)_    |
-| `INCLUDE_CSS`             | When set to any non-empty value, enables CSS/SCSS change detection and taint propagation through `@use`/`@import` chains                                       | _(disabled)_    |
-| `COMPARE_COMMIT`          | Specific git commit hash to compare against (overrides branch-based comparison)                                                                                | _(empty)_       |
-| `COMPARE_BRANCH`          | Git branch to compute merge base against                                                                                                                       | `origin/master` |
-| `TARGETS`                 | Comma-delimited list of target names to include in output. Supports `*` wildcard (e.g. `*backstop*,@gooddata/sdk-*`).                                          | _(all targets)_ |
 
 ## Library vs app detection
 
@@ -200,7 +222,7 @@ Taint spreads through the import graph via unlimited BFS hops:
 
 ### CSS/SCSS taint (opt-in)
 
-When `INCLUDE_CSS` is set:
+When `--include-css` is set:
 
 - Any changed `.css`/`.scss` file taints the entire package's styles
 - Style imports (`*.css`, `*.scss`, paths containing `/styles/`) from tainted packages are detected
@@ -258,10 +280,12 @@ Usage:
 docker run --rm \
   -v /path/to/rush-monorepo:/repo \
   -w /repo \
-  -e LOG_LEVEL=BASIC \
-  -e COMPARE_BRANCH=origin/master \
-  gooddata/gooddata-goodchanges:latest
+  gooddata/gooddata-goodchanges:latest \
+  detect --log-level BASIC --compare-branch origin/master
 ```
+
+The image's default command is `detect`, so a bare `docker run ... gooddata/gooddata-goodchanges:latest`
+runs change detection with default flags. Pass any other command (e.g. `version`) to override.
 
 ## Example configurations
 
@@ -275,8 +299,20 @@ Example analysis reports are in `testing_pre_merge/prs/` and `testing_post_merge
 ## Project structure
 
 ```
-main.go                          # Entry point, orchestration
+main.go                          # Dispatcher: command map, argv parse/validate, --help/usage
+cmd/
+  detect/
+    detect.go                    # `detect` command: change-detection orchestration + schema
+  list_projects/
+    list_projects.go             # `list-projects` command: rush project dump + schema
+  version/
+    version.go                   # `version` command (also -v/--version) + schema
 internal/
+  cli/
+    types.go                     # Flag/Schema types (single source of truth per command)
+    parse.go                     # Schema-aware argv parsing (unknown flags fail fast)
+    validate.go                  # Arity, required, repeatable, allowed-values checks
+    help.go                      # Per-command --help rendering from the schema
   analyzer/
     analyzer.go                  # Library analysis, taint propagation, CSS tracking
     astdiff.go                   # AST-level symbol diffing, type-only detection

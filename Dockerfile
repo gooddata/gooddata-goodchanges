@@ -20,3 +20,6 @@ RUN apk add --no-cache git && git config --global --add safe.directory '*'
 COPY --from=builder /app/goodchanges /usr/bin/goodchanges
 
 ENTRYPOINT ["/usr/bin/goodchanges"]
+# Default command: a bare `docker run <image>` runs change detection, as it did
+# before the multi-command interface. Pass another command to override.
+CMD ["detect"]
