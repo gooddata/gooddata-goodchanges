@@ -1,0 +1,690 @@
+// Package detect holds the entrypoint for `goodchanges detect` — the change
+// detection flow: resolve the compare commit/branch, diff the changed code,
+// propagate taint through the workspace graph, and print the affected targets
+// as JSON on stdout.
+package detect
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/bmatcuk/doublestar/v4"
+
+	"goodchanges/internal/analyzer"
+	"goodchanges/internal/cli"
+	"goodchanges/internal/git"
+	"goodchanges/internal/lockfile"
+	"goodchanges/internal/log"
+	"goodchanges/internal/rush"
+)
+
+// Schema declares what `goodchanges detect` accepts. It mirrors the env-var
+// interface it replaces (TARGETS, COMPARE_COMMIT, COMPARE_BRANCH, INCLUDE_CSS,
+// INCLUDE_TYPES, LOG_LEVEL) one flag per var. detect takes no positional
+// arguments — any positional arg fails validation.
+var Schema = cli.Schema{
+	MinArgs:     0,
+	MaxArgs:     0,
+	Description: "detect affected targets by diffing changed code against the compare commit/branch",
+	Flags: []cli.Flag{
+		{
+			Name:        "targets",
+			TakesValue:  true,
+			ValueName:   "list",
+			Description: "comma-delimited target names/patterns to include in the output; supports '*' wildcards (e.g. '*backstop*,@gooddata/sdk-*'); default: all targets",
+		},
+		{
+			Name:        "compare-commit",
+			TakesValue:  true,
+			ValueName:   "commit",
+			Description: "git commit to diff against (overrides branch-based comparison)",
+		},
+		{
+			Name:        "compare-branch",
+			TakesValue:  true,
+			ValueName:   "branch",
+			Description: "git branch to compute the merge base against; default: origin/master",
+		},
+		{
+			Name:        "include-css",
+			Description: "enable CSS/SCSS change detection and taint propagation through @use/@import chains",
+		},
+		{
+			Name:        "include-types",
+			Description: "include type-only changes (interfaces, type aliases, annotations) in taint propagation",
+		},
+		{
+			Name:          "log-level",
+			TakesValue:    true,
+			ValueName:     "level",
+			AllowedValues: []string{"BASIC", "DEBUG"},
+			Description:   "logging verbosity on stderr: BASIC for progress, DEBUG for verbose AST/taint tracing; default: no logging",
+		},
+	},
+}
+
+// TargetResult is one affected target in the JSON output. Detections is only
+// set for fine-grained targets, listing the specific files that matched.
+type TargetResult struct {
+	Name       string   `json:"name"`
+	Detections []string `json:"detections,omitempty"`
+}
+
+// Run executes change detection. args/flags arrive parsed and validated by
+// main against Schema; detect never reads argv or env vars itself.
+func Run(args []string, flags map[string][]string) error {
+	_ = args // no positional args (enforced by the schema)
+
+	_, includeTypes := flags["include-types"]
+	_, includeCSS := flags["include-css"]
+
+	logBasic := false
+	logDebug := false
+	if lv := flags["log-level"]; len(lv) > 0 {
+		logBasic = true
+		logDebug = lv[0] == "DEBUG"
+	}
+	log.Basic = logBasic
+	log.Debug = logDebug
+	analyzer.IncludeCSS = includeCSS
+
+	var mergeBase string
+	if cc := flags["compare-commit"]; len(cc) > 0 {
+		mergeBase = cc[0]
+	} else {
+		compareBranch := "origin/master"
+		if cb := flags["compare-branch"]; len(cb) > 0 {
+			compareBranch = cb[0]
+		}
+		var err error
+		mergeBase, err = git.MergeBase(compareBranch)
+		if err != nil {
+			return fmt.Errorf("finding merge-base with %s: %w", compareBranch, err)
+		}
+	}
+
+	changedFiles, err := git.ChangedFilesSince(mergeBase)
+	if err != nil {
+		return fmt.Errorf("getting changed files: %w", err)
+	}
+
+	rushConfig, err := rush.LoadConfig(".")
+	if err != nil {
+		return fmt.Errorf("loading rush config: %w", err)
+	}
+
+	projectMap := rush.BuildProjectMap(rushConfig)
+	configMap := rush.LoadAllProjectConfigs(rushConfig)
+
+	for projectFolder, cfg := range configMap {
+		if cfg == nil || cfg.Type == nil {
+			continue
+		}
+		if *cfg.Type != "library" && *cfg.Type != "app" {
+			return fmt.Errorf("invalid type %q in %s/.goodchangesrc.json: must be \"library\" or \"app\"", *cfg.Type, projectFolder)
+		}
+	}
+
+	// Parse the --targets filter early to skip expensive detection for non-matching targets
+	var targetPatterns []string
+	if tv := flags["targets"]; len(tv) > 0 {
+		targetPatterns = strings.Split(tv[0], ",")
+	}
+
+	// When TARGETS is set, compute the relevant package set: active targets + their
+	// transitive dependencies. Only these packages need change detection and analysis.
+	var relevantPackages map[string]bool
+	if len(targetPatterns) > 0 {
+		var targetSeeds []string
+		for _, rp := range rushConfig.Projects {
+			cfg := configMap[rp.ProjectFolder]
+			if cfg == nil {
+				continue
+			}
+			for _, td := range cfg.Targets {
+				if !matchesTargetFilter(td.OutputName(rp.PackageName), targetPatterns) {
+					continue
+				}
+				targetSeeds = append(targetSeeds, rp.PackageName)
+			}
+		}
+		relevantPackages = rush.FindTransitiveDependencies(projectMap, targetSeeds)
+	}
+
+	changedProjects := rush.FindChangedProjects(rushConfig, projectMap, changedFiles, configMap, relevantPackages)
+
+	// Detect lockfile dep changes per subspace (folder → set of changed dep names)
+	depChangedDeps, versionChangedSubspaces := findLockfileAffectedProjects(rushConfig, mergeBase)
+
+	// When lockfileVersion changes in a subspace, treat all projects in that subspace
+	// as having all external deps changed. This feeds into the existing taint propagation:
+	// depChangedDeps → changedProjects → affectedSet → library analysis → target detection.
+	for _, rp := range rushConfig.Projects {
+		subspace := rp.SubspaceName
+		if subspace == "" {
+			subspace = "default"
+		}
+		if versionChangedSubspaces[subspace] {
+			if depChangedDeps[rp.ProjectFolder] == nil {
+				depChangedDeps[rp.ProjectFolder] = make(map[string]bool)
+			}
+			depChangedDeps[rp.ProjectFolder]["*"] = true
+		}
+	}
+
+	// Add dep-affected projects to the changed set (they count as directly changed)
+	for folder := range depChangedDeps {
+		for _, rp := range rushConfig.Projects {
+			if rp.ProjectFolder == folder {
+				if relevantPackages != nil && !relevantPackages[rp.PackageName] {
+					break
+				}
+				if changedProjects[rp.PackageName] == nil {
+					changedProjects[rp.PackageName] = projectMap[rp.PackageName]
+				}
+				break
+			}
+		}
+	}
+
+	// Find the full affected subgraph: directly changed + all transitive dependents
+	var seeds []string
+	for pkgName := range changedProjects {
+		seeds = append(seeds, pkgName)
+	}
+	affectedSet := rush.FindTransitiveDependents(projectMap, seeds)
+
+	// Narrow to relevant packages when TARGETS is set
+	if relevantPackages != nil {
+		for pkg := range affectedSet {
+			if !relevantPackages[pkg] {
+				delete(affectedSet, pkg)
+			}
+		}
+	}
+
+	// Topologically sort: level 0 = lowest-level (no deps on other affected packages)
+	levels := rush.TopologicalSort(projectMap, affectedSet)
+
+	log.Basicf("Merge base: %s\n", mergeBase)
+	log.Basicf("Directly changed projects: %d", len(changedProjects))
+	log.Basicf("Dep-affected projects (lockfile): %d", len(depChangedDeps))
+	log.Basicf("Total affected projects (incl. transitive dependents): %d", len(affectedSet))
+	log.Basicf("Processing in %d levels (bottom-up):\n", len(levels))
+
+	// Track affected exports per package for cross-package propagation.
+	allUpstreamTaint := make(map[string]map[string]bool)
+
+	// Seed upstream taint for libraries in version-changed subspaces.
+	// A lockfileVersion change means we can't reliably diff individual deps,
+	// so treat all exports as tainted. This propagates through the analysis loop.
+	for _, rp := range rushConfig.Projects {
+		subspace := rp.SubspaceName
+		if subspace == "" {
+			subspace = "default"
+		}
+		if !versionChangedSubspaces[subspace] {
+			continue
+		}
+		info := projectMap[rp.PackageName]
+		if info == nil {
+			continue
+		}
+		if analyzer.IsLibrary(configMap[rp.ProjectFolder], info.Package) {
+			if allUpstreamTaint[rp.PackageName] == nil {
+				allUpstreamTaint[rp.PackageName] = make(map[string]bool)
+			}
+			allUpstreamTaint[rp.PackageName]["*"] = true
+		}
+	}
+
+	// CSS/SCSS taint propagation: when --include-css is set, any changed CSS/SCSS
+	// file in a library taints all style imports from that library in downstream packages.
+	// This runs BEFORE library analysis so the __css__ closure is available while seeding
+	// taint: a library whose TS entrypoint side-effect-imports a style file that @use's a
+	// CSS-tainted package inherits taint on its JS exports, which then propagates through
+	// the normal bottom-up TS import graph into JS consumers (Pattern A — JS-bundled CSS).
+	if includeCSS {
+		cssTaintedPkgs := analyzer.FindCSSTaintedPackages(changedFiles, rushConfig, projectMap)
+		for pkgName := range cssTaintedPkgs {
+			key := analyzer.CSSTaintPrefix + pkgName
+			if allUpstreamTaint[key] == nil {
+				allUpstreamTaint[key] = make(map[string]bool)
+			}
+			allUpstreamTaint[key]["*"] = true
+			if logDebug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] CSS taint: %s\n", pkgName)
+			}
+		}
+		// Propagate CSS taint through SCSS @use chains across libraries
+		analyzer.PropagateCSSTaint(rushConfig, projectMap, allUpstreamTaint)
+	}
+
+	type pkgResult struct {
+		pkgName  string
+		affected []analyzer.AffectedExport
+	}
+
+	for levelIdx, level := range levels {
+		log.Basicf("--- Level %d (%d packages) ---\n", levelIdx, len(level))
+
+		var wg sync.WaitGroup
+		resultsCh := make(chan pkgResult, len(level))
+
+		for _, pkgName := range level {
+			info := projectMap[pkgName]
+			if info == nil {
+				continue
+			}
+			pkg := info.Package
+			lib := analyzer.IsLibrary(configMap[info.ProjectFolder], pkg)
+			directlyChanged := changedProjects[pkgName] != nil
+			changedDeps := depChangedDeps[info.ProjectFolder]
+			isDepAffected := len(changedDeps) > 0
+
+			log.Basicf("=== %s (%s) ===", pkgName, info.ProjectFolder)
+			if directlyChanged && isDepAffected {
+				log.Basicf("  [directly changed + dep change in lockfile]")
+			} else if directlyChanged {
+				log.Basicf("  [directly changed]")
+			} else if isDepAffected {
+				log.Basicf("  [dep change in lockfile]")
+			} else {
+				log.Basicf("  [affected via dependencies]")
+			}
+
+			if !lib {
+				log.Basicf("  Type: app (not a library) — skipping export analysis")
+				// An app gets no per-symbol export diffing; when it IS affected it is
+				// tainted wholesale (anything importing from it — e.g. a thin harness
+				// that dynamically imports it — must be treated as tainted too). But
+				// being merely reachable in the affected set is not enough: a transitive
+				// dependent whose upstream change touched nothing this app actually
+				// imports must NOT be tainted, or every downstream harness/host target
+				// gets flagged for unrelated changes. So gate the seed on the same
+				// conditions the app's own target detection uses: directly changed
+				// (has changed files), a changed lockfile dep, or an actual tainted
+				// import from upstream.
+				appAffected := directlyChanged || isDepAffected
+				if !appAffected {
+					appUpstreamTaint := buildPkgUpstreamTaint(info.DependsOn, allUpstreamTaint)
+					appAffected = analyzer.HasTaintedImportsForGlob(info.ProjectFolder, "**/*", appUpstreamTaint, configMap[info.ProjectFolder])
+				}
+				if !appAffected {
+					log.Basicf("  App not affected by this change (no changed files, no tainted imports) — not tainting\n")
+					continue
+				}
+				// Seed ALL of the app's entrypoint exports, mirroring the global-changeDirs
+				// full-taint seeding used for libraries below. Downstream importers then
+				// match these in HasTaintedImportsForGlob / FindAffectedFiles — including
+				// bare/dynamic side-effect imports, which match on any non-empty symbol
+				// set for the package.
+				entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
+				totalExports := 0
+				for _, ep := range entrypoints {
+					specifier := pkgName
+					if ep.ExportPath != "." {
+						specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
+					}
+					exports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
+					if allUpstreamTaint[specifier] == nil {
+						allUpstreamTaint[specifier] = make(map[string]bool)
+					}
+					for _, name := range exports {
+						allUpstreamTaint[specifier][name] = true
+					}
+					// A side-effect-only entrypoint enumerates zero exports, which would
+					// leave an empty (== untainted) set and stop propagation to bare/dynamic
+					// importers. Fall back to the "*" whole-package marker (as used for
+					// version-changed and CSS-tainted packages) so the app still taints
+					// wholesale.
+					if len(exports) == 0 {
+						allUpstreamTaint[specifier]["*"] = true
+					}
+					totalExports += len(exports)
+				}
+				log.Basicf("  App is affected — tainting all %d exports across %d entrypoint(s) (whole-app taint)\n", totalExports, len(entrypoints))
+				continue
+			}
+
+			log.Basicf("  Type: library")
+
+			entrypoints := analyzer.FindEntrypoints(info.ProjectFolder, pkg)
+			if len(entrypoints) == 0 {
+				log.Basicf("  No entrypoints found — skipping\n")
+				continue
+			}
+			log.Basicf("  Entrypoints:")
+			for _, ep := range entrypoints {
+				log.Basicf("    %s → %s", ep.ExportPath, ep.SourceFile)
+			}
+
+			if isDepAffected {
+				depNames := make([]string, 0, len(changedDeps))
+				for d := range changedDeps {
+					depNames = append(depNames, d)
+				}
+				log.Basicf("  Changed external deps: %s", strings.Join(depNames, ", "))
+			}
+
+			// Global changeDirs: if triggered, enumerate all exports per entrypoint
+			// and seed them as tainted (skip expensive per-symbol analysis).
+			libCfg := configMap[info.ProjectFolder]
+			if libCfg != nil && len(libCfg.ChangeDirs) > 0 {
+				if globalChangeDirTriggered(libCfg.ChangeDirs, changedFiles, info.ProjectFolder, libCfg) {
+					totalExports := 0
+					for _, ep := range entrypoints {
+						specifier := pkgName
+						if ep.ExportPath != "." {
+							specifier = pkgName + strings.TrimPrefix(ep.ExportPath, ".")
+						}
+						exports := analyzer.CollectEntrypointExports(info.ProjectFolder, ep)
+						if allUpstreamTaint[specifier] == nil {
+							allUpstreamTaint[specifier] = make(map[string]bool)
+						}
+						for _, name := range exports {
+							allUpstreamTaint[specifier][name] = true
+						}
+						totalExports += len(exports)
+					}
+					log.Basicf("  Global changeDirs triggered — %d exports tainted across %d entrypoints\n", totalExports, len(entrypoints))
+					continue
+				}
+			}
+
+			// Build upstream taint for this package from its dependencies.
+			// allUpstreamTaint is only read here — writes happen after the level completes.
+			pkgUpstreamTaint := buildPkgUpstreamTaint(info.DependsOn, allUpstreamTaint)
+
+			wg.Add(1)
+			go func(pkgName string, projectFolder string, entrypoints []analyzer.Entrypoint, pkgUpstreamTaint map[string]map[string]bool, changedDeps map[string]bool) {
+				defer wg.Done()
+				affected, err := analyzer.AnalyzeLibraryPackage(projectFolder, entrypoints, mergeBase, changedFiles, includeTypes, pkgUpstreamTaint, changedDeps)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Error analyzing package %s: %v\n", pkgName, err)
+					return
+				}
+				if len(affected) > 0 {
+					resultsCh <- pkgResult{pkgName: pkgName, affected: affected}
+				}
+			}(pkgName, info.ProjectFolder, entrypoints, pkgUpstreamTaint, changedDeps)
+		}
+
+		wg.Wait()
+		close(resultsCh)
+
+		// Merge results into allUpstreamTaint after all goroutines in this level are done
+		for res := range resultsCh {
+			log.Basicf("  Affected exports for %s:", res.pkgName)
+			for _, ae := range res.affected {
+				log.Basicf("    Entrypoint %q:", ae.EntrypointPath)
+				for _, name := range ae.ExportNames {
+					log.Basicf("      - %s", name)
+				}
+
+				specifier := res.pkgName
+				if ae.EntrypointPath != "." {
+					specifier = res.pkgName + strings.TrimPrefix(ae.EntrypointPath, ".")
+				}
+				if allUpstreamTaint[specifier] == nil {
+					allUpstreamTaint[specifier] = make(map[string]bool)
+				}
+				for _, name := range ae.ExportNames {
+					allUpstreamTaint[specifier][name] = true
+				}
+			}
+			log.Basicf("")
+		}
+	}
+
+	// Detect affected targets from .goodchangesrc.json configs.
+	changedE2E := make(map[string]*TargetResult)
+	defaultChangeDirs := []rush.ChangeDir{{Glob: "**/*"}}
+
+	for _, rp := range rushConfig.Projects {
+		cfg := configMap[rp.ProjectFolder]
+		if cfg == nil {
+			continue
+		}
+
+		// Global changeDirs: if triggered, add ALL targets for this package
+		if len(cfg.ChangeDirs) > 0 {
+			if globalChangeDirTriggered(cfg.ChangeDirs, changedFiles, rp.ProjectFolder, cfg) {
+				for _, td := range cfg.Targets {
+					name := td.OutputName(rp.PackageName)
+					if len(targetPatterns) > 0 && !matchesTargetFilter(name, targetPatterns) {
+						continue
+					}
+					changedE2E[name] = &TargetResult{Name: name}
+				}
+				continue
+			}
+		}
+
+		for _, td := range cfg.Targets {
+			name := td.OutputName(rp.PackageName)
+			if len(targetPatterns) > 0 && !matchesTargetFilter(name, targetPatterns) {
+				continue
+			}
+
+			// Merge global + per-target ignores for this target's detection
+			targetCfg := cfg.WithTargetIgnores(td)
+
+			// Quick check: lockfile dep changes (project-wide)
+			if len(depChangedDeps[rp.ProjectFolder]) > 0 {
+				changedE2E[name] = &TargetResult{Name: name}
+				continue
+			}
+
+			// ChangeDirs detection (defaults to **/* if not configured)
+			changeDirs := td.ChangeDirs
+			if len(changeDirs) == 0 {
+				changeDirs = defaultChangeDirs
+			}
+
+			normalTriggered := false
+			var fineGrainedDetections []string
+
+			for _, cd := range changeDirs {
+				if cd.IsFineGrained() {
+					filterPattern := ""
+					if cd.Filter != nil {
+						filterPattern = *cd.Filter
+					}
+					detected := analyzer.FindAffectedFiles(cd.Glob, filterPattern, allUpstreamTaint, changedFiles, rp.ProjectFolder, targetCfg, depChangedDeps[rp.ProjectFolder], mergeBase, includeTypes)
+					if len(detected) > 0 {
+						fineGrainedDetections = append(fineGrainedDetections, detected...)
+					}
+				} else {
+					// Normal: check for any changed file matching the glob
+					for _, f := range changedFiles {
+						if !strings.HasPrefix(f, rp.ProjectFolder+"/") {
+							continue
+						}
+						relPath := strings.TrimPrefix(f, rp.ProjectFolder+"/")
+						if targetCfg.IsIgnored(relPath) {
+							continue
+						}
+						if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
+							normalTriggered = true
+							break
+						}
+					}
+					if !normalTriggered {
+						if analyzer.HasTaintedImportsForGlob(rp.ProjectFolder, cd.Glob, allUpstreamTaint, targetCfg) {
+							normalTriggered = true
+						}
+					}
+				}
+				if normalTriggered {
+					break
+				}
+			}
+
+			if normalTriggered {
+				changedE2E[name] = &TargetResult{Name: name}
+			} else if len(fineGrainedDetections) > 0 {
+				sort.Strings(fineGrainedDetections)
+				changedE2E[name] = &TargetResult{
+					Name:       name,
+					Detections: fineGrainedDetections,
+				}
+			}
+		}
+	}
+
+	// Build sorted list of affected targets
+	e2eList := make([]*TargetResult, 0, len(changedE2E))
+	for _, result := range changedE2E {
+		e2eList = append(e2eList, result)
+	}
+	sort.Slice(e2eList, func(i, j int) bool {
+		return e2eList[i].Name < e2eList[j].Name
+	})
+
+	if logBasic {
+		log.Basicf("Affected targets (%d):", len(e2eList))
+		for _, result := range e2eList {
+			if len(result.Detections) > 0 {
+				log.Basicf("  - %s (fine-grained: %d files)", result.Name, len(result.Detections))
+				for _, d := range result.Detections {
+					log.Basicf("      %s", d)
+				}
+			} else {
+				log.Basicf("  - %s", result.Name)
+			}
+		}
+	}
+
+	// Always output JSON to stdout
+	jsonBytes, _ := json.Marshal(e2eList)
+	fmt.Println(string(jsonBytes))
+
+	return nil
+}
+
+// findLockfileAffectedProjects checks each subspace's pnpm-lock.yaml for dep changes.
+// Parses old (merge base) and new (current) lockfiles as YAML and compares resolved
+// versions for direct and transitive dependencies.
+// Returns:
+//   - depChanges: project folder → set of changed external dep package names
+//   - versionChanges: subspace name → true for subspaces where lockfileVersion changed
+func findLockfileAffectedProjects(config *rush.Config, mergeBase string) (map[string]map[string]bool, map[string]bool) {
+	// Collect subspaces: "default" for projects without subspaceName, plus named ones
+	subspaces := make(map[string]bool)
+	subspaces["default"] = true
+	for _, p := range config.Projects {
+		if p.SubspaceName != "" {
+			subspaces[p.SubspaceName] = true
+		}
+	}
+
+	result := make(map[string]map[string]bool)
+	versionChanged := make(map[string]bool)
+	for subspace := range subspaces {
+		lockfilePath := filepath.Join("common", "config", "subspaces", subspace, "pnpm-lock.yaml")
+		newContent, err := os.ReadFile(lockfilePath)
+		if err != nil {
+			continue
+		}
+		oldContent, _ := git.ShowFile(mergeBase, lockfilePath)
+
+		oldLf := lockfile.ParseLockfile([]byte(oldContent))
+		newLf := lockfile.ParseLockfile(newContent)
+
+		if oldLf.Version() != newLf.Version() {
+			versionChanged[subspace] = true
+			log.Basicf("lockfileVersion changed in subspace %q: %q → %q", subspace, oldLf.Version(), newLf.Version())
+		}
+
+		affected := lockfile.FindDepChanges(oldLf, newLf, subspace)
+		for folder, deps := range affected {
+			if result[folder] == nil {
+				result[folder] = make(map[string]bool)
+			}
+			for dep := range deps {
+				result[folder][dep] = true
+			}
+		}
+	}
+	return result, versionChanged
+}
+
+// buildPkgUpstreamTaint filters the global taint map down to the entries that
+// belong to a package's direct dependencies — matching on specifier prefix, and
+// (for CSS-taint keys) on the package name inside the "__css__:" namespace. This
+// is the per-package upstream taint used both to analyse a library and to decide
+// whether an app actually imports any tainted upstream export.
+func buildPkgUpstreamTaint(dependsOn []string, allUpstreamTaint map[string]map[string]bool) map[string]map[string]bool {
+	pkgUpstreamTaint := make(map[string]map[string]bool)
+	for _, dep := range dependsOn {
+		for specifier, names := range allUpstreamTaint {
+			matches := strings.HasPrefix(specifier, dep)
+			if !matches && strings.HasPrefix(specifier, analyzer.CSSTaintPrefix) {
+				// CSS taint keys are namespaced ("__css__:pkg"); match on the package name
+				// so a dep's CSS taint is visible while analysing this package's style @use chains.
+				matches = strings.HasPrefix(strings.TrimPrefix(specifier, analyzer.CSSTaintPrefix), dep)
+			}
+			if matches {
+				if pkgUpstreamTaint[specifier] == nil {
+					pkgUpstreamTaint[specifier] = make(map[string]bool)
+				}
+				for n := range names {
+					pkgUpstreamTaint[specifier][n] = true
+				}
+			}
+		}
+	}
+	return pkgUpstreamTaint
+}
+
+// globalChangeDirTriggered checks if any changed file matches a global changeDir glob.
+func globalChangeDirTriggered(changeDirs []rush.ChangeDir, changedFiles []string, projectFolder string, cfg *rush.ProjectConfig) bool {
+	for _, cd := range changeDirs {
+		for _, f := range changedFiles {
+			if !strings.HasPrefix(f, projectFolder+"/") {
+				continue
+			}
+			relPath := strings.TrimPrefix(f, projectFolder+"/")
+			if cfg.IsIgnored(relPath) {
+				continue
+			}
+			if matched, _ := doublestar.Match(cd.Glob, relPath); matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesTargetFilter checks if a target name matches any of the given patterns.
+// Patterns support * as a wildcard matching any characters (including /).
+func matchesTargetFilter(name string, patterns []string) bool {
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// Convert glob pattern to regex: * -> .*, escape the rest
+		var re strings.Builder
+		re.WriteString("^")
+		for _, ch := range p {
+			if ch == '*' {
+				re.WriteString(".*")
+			} else {
+				re.WriteString(regexp.QuoteMeta(string(ch)))
+			}
+		}
+		re.WriteString("$")
+		if matched, _ := regexp.MatchString(re.String(), name); matched {
+			return true
+		}
+	}
+	return false
+}
