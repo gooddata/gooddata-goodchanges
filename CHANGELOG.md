@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.2] - 2026-10-23
+
+### Changed
+- Upgrade Go module dependencies: `github.com/bmatcuk/doublestar/v4` 4.10.0 → 4.10.3 (direct); `github.com/go-json-experiment/json` 20260623 → 20260820, `github.com/klauspost/cpuid/v2` 2.2.10 → 2.4.1, `golang.org/x/sync` 0.21.0 → 0.24.0, `golang.org/x/sys` 0.46.0 → 0.49.0, `golang.org/x/text` 0.38.0 → 0.43.0 (indirect). No behaviour change.
+
 ## [0.26.1] - 2026-10-22
 
 ### Changed
@@ -454,6 +459,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.26.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.0...v0.26.1
 [0.25.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.7...v0.25.8
 [0.25.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.6...v0.25.7
