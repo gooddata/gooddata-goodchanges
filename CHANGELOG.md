@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.2] - 2026-10-23
+
+### Changed
+- **The vendored TypeScript parser is now sourced from [microsoft/TypeScript](https://github.com/microsoft/TypeScript) (`tsc/` subdirectory, Go module `github.com/microsoft/TypeScript/tsc`).** The native Go port was developed in the staging repo [microsoft/typescript-go](https://github.com/microsoft/typescript-go), which is now archived; its contents were merged into the main TypeScript repository under `tsc/`. `vendor-tsgo.sh` now fetches from the new repo and rewrites the new module path (`github.com/microsoft/TypeScript/tsc/internal/…`) to `goodchanges/tsgo-vendor/pkg/…`; the resulting module name and the import paths used by `internal/tsparse` and `internal/analyzer` are unchanged. `TSGO_COMMIT` now holds a microsoft/TypeScript commit hash — hashes from earlier releases refer to the old repo and cannot be vendored with the new script.
+- Vendoring pins to microsoft/TypeScript [`5f647a841a6a`](https://github.com/microsoft/TypeScript/commit/5f647a841a6a4dec9d8594854c320d5808134809) (`tsc/` still on Go 1.26; upstream `main` has since moved to 1.27).
+- `vendor-tsgo.sh` fetches only what is needed: a single commit (`--depth 1`, no history), with a sparse checkout limited to `tsc/` and `--filter=blob:none` so no blobs outside that subdirectory are ever downloaded. The fetch happens in a temporary clone whose `tsc/` is moved into `_vendor/typescript-go`; the temporary clone — including its `.git` — is discarded, so no commit data lands in the vendor directory.
+- The `vendor ~ upgrade` workflow resolves `latest` from microsoft/TypeScript `main` and links changelog entries, PR bodies and Slack notifications to commits in that repo.
+- README: the "Vendored TypeScript parser" section describes the new upstream location, the sparse fetch, and the migration note. It also drops the documented `vendor-tsgo.sh --update` flag, which the script never implemented — to upgrade, write the new hash to `TSGO_COMMIT` and re-run the script (or use the workflow).
+
 ## [0.26.1] - 2026-10-22
 
 ### Changed
@@ -454,6 +463,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.26.2]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.0...v0.26.1
 [0.25.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.7...v0.25.8
 [0.25.7]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.25.6...v0.25.7
