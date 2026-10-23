@@ -1,6 +1,7 @@
 package tsparse
 
 import (
+	"goodchanges/tsgo-vendor/pkg/tspath"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 type Import struct {
-	Names  []string // imported (source-side) names, or ["*:alias"] for namespace import
+	Names []string // imported (source-side) names, or ["*:alias"] for namespace import
 	// LocalNames holds the local binding name for each entry in Names (parallel slice).
 	// For a plain `import { X }` LocalNames[i] == Names[i]; for an aliased
 	// `import { X as Y }` Names[i] is "X" (what the source exports) and
@@ -66,7 +67,7 @@ func ParseContent(content string, filename string) (*FileAnalysis, error) {
 	}
 
 	sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
-		FileName: absPath,
+		FileName: tspath.RootedFilePathFromAbsolute(absPath),
 	}, content, scriptKind)
 
 	analysis := &FileAnalysis{
