@@ -151,6 +151,8 @@ jobs:
       - name: Create branch and commit changes
         if: steps.resolve-hash.outputs.NEEDS_UPDATE == 'true'
         id: create-branch
+        env:
+          PATCH: ${{ inputs.patch }}
         run: |
           SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
           HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
@@ -162,7 +164,6 @@ jobs:
 
           git checkout -b "$BRANCH_NAME"
 
-          PATCH="${{ inputs.patch }}"
           if [[ -n "$PATCH" ]]; then
             printf '%b' "$PATCH" > /tmp/vendor-upgrade.patch
             git apply /tmp/vendor-upgrade.patch
