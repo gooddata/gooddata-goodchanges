@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       commit_hash:
-        description: 'typescript-go commit hash to vendor (leave "latest" for newest main)'
+        description: 'microsoft/TypeScript commit hash to vendor (leave "latest" for newest main)'
         required: true
         default: 'latest'
         type: string
@@ -50,7 +50,7 @@ jobs:
         run: |
           INPUT="${{ inputs.commit_hash }}"
           if [[ "$INPUT" == "latest" ]]; then
-            HASH=$(gh api repos/microsoft/typescript-go/commits/main --jq '.sha')
+            HASH=$(gh api repos/microsoft/TypeScript/commits/main --jq '.sha')
             echo "Resolved latest to $HASH"
           else
             HASH="$INPUT"
@@ -116,7 +116,7 @@ jobs:
           ## [${NEW_VERSION}] - ${TODAY}
 
           ### Changed
-          - Upgrade vendored typescript-go to [\`${SHORT}\`](https://github.com/microsoft/typescript-go/commit/${HASH})
+          - Upgrade vendored TypeScript Go port (tsc/) to [\`${SHORT}\`](https://github.com/microsoft/TypeScript/commit/${HASH})
 
           EOF
 
@@ -155,7 +155,7 @@ jobs:
           SHORT="${{ steps.resolve-hash.outputs.short_hash }}"
           HASH="${{ steps.resolve-hash.outputs.commit_hash }}"
           BRANCH_NAME="vendor-upgrade-${SHORT}"
-          COMMIT_TITLE="chore: Upgrade vendored typescript-go to ${SHORT}"
+          COMMIT_TITLE="chore: Upgrade vendored TypeScript Go port to ${SHORT}"
 
           git config user.name "git-action"
           git config user.email "git-action@gooddata.com"
@@ -198,7 +198,7 @@ jobs:
         with:
           title: ${{ steps.create-branch.outputs.commit_title }}
           body: |
-            Automated upgrade of vendored typescript-go to [`${{ steps.resolve-hash.outputs.short_hash }}`](https://github.com/microsoft/typescript-go/commit/${{ steps.resolve-hash.outputs.commit_hash }})
+            Automated upgrade of the vendored TypeScript Go port (`tsc/`) to [`${{ steps.resolve-hash.outputs.short_hash }}`](https://github.com/microsoft/TypeScript/commit/${{ steps.resolve-hash.outputs.commit_hash }})
           base: master
           head: ${{ steps.create-branch.outputs.branch_name }}
           github-token: ${{ secrets.TOKEN_GITHUB_YENKINS }}
@@ -232,6 +232,6 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.1
         with:
           channel-id: '#javascript-notifications'
-          slack-message: ":white_check_mark: `goodchanges vendor-upgrade:` *success*; upgraded typescript-go to *${{ needs.upgrade.outputs.commit_hash }}*. PR: ${{ needs.upgrade.outputs.pr-url }}"
+          slack-message: ":white_check_mark: `goodchanges vendor-upgrade:` *success*; upgraded TypeScript Go port to *${{ needs.upgrade.outputs.commit_hash }}*. PR: ${{ needs.upgrade.outputs.pr-url }}"
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

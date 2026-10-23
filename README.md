@@ -230,30 +230,32 @@ When `--include-css` is set:
 
 ## Vendored TypeScript parser
 
-The tool vendors [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for AST parsing. The pinned commit hash is stored in `TSGO_COMMIT`.
+The tool vendors the native Go port of TypeScript for AST parsing. It lives in the [`tsc/` subdirectory of microsoft/TypeScript](https://github.com/microsoft/TypeScript/tree/main/tsc) (Go module `github.com/microsoft/TypeScript/tsc`). The pinned commit hash of that repository is stored in `TSGO_COMMIT`.
+
+> **Note:** the port was originally developed in the staging repo [microsoft/typescript-go](https://github.com/microsoft/typescript-go), which is now archived. Commit hashes in `TSGO_COMMIT` from before the migration refer to that repo; newer ones refer to microsoft/TypeScript.
 
 ### Why vendoring is necessary
 
-We cannot use `typescript-go` as a regular Go dependency because its parser, AST types, and all other packages live under `internal/`. Go enforces that `internal/` packages can only be imported by code within the same module, so no external project can `import "github.com/microsoft/typescript-go/internal/parser"`. The project does not expose a public Go API — it is structured as a standalone tool, not a library.
+We cannot use the Go port as a regular Go dependency because its parser, AST types, and all other packages live under `tsc/internal/`. Go enforces that `internal/` packages can only be imported by code within the same module, so no external project can `import "github.com/microsoft/TypeScript/tsc/internal/parser"`. The project does not expose a public Go API — it is structured as a standalone tool, not a library.
 
-The vendor script works around this by shallow-cloning the repository, renaming `internal/` to `pkg/`, and rewriting all import paths. This makes the parser packages importable from our module via a local `replace` directive in `go.mod`.
+The vendor script works around this by fetching just the `tsc/` subdirectory at the pinned commit, renaming `internal/` to `pkg/`, and rewriting all import paths. This makes the parser packages importable from our module via a local `replace` directive in `go.mod`.
 
 ### Vendoring
 
 ```bash
 # Vendor using the pinned commit
 bash vendor-tsgo.sh
-
-# Update to latest and vendor
-bash vendor-tsgo.sh --update
 ```
+
+To upgrade, write the new microsoft/TypeScript commit hash to `TSGO_COMMIT` and re-run the script (or use the automated workflow below).
 
 The vendor script:
 
 1. Reads the commit hash from `TSGO_COMMIT`
-2. Shallow-clones that specific commit
-3. Renames `internal/` to `pkg/` (to make packages importable)
-4. Rewrites import paths and module name
+2. Fetches only that single commit with a sparse checkout limited to `tsc/` (depth 1, `--filter=blob:none`, so no history and no files outside `tsc/` are downloaded)
+3. Moves `tsc/` into `_vendor/typescript-go` and discards the temporary clone, including its `.git`
+4. Renames `internal/` to `pkg/` (to make packages importable)
+5. Rewrites import paths and module name to `goodchanges/tsgo-vendor`
 
 ### Automated upgrades
 
@@ -267,7 +269,7 @@ The `vendor ~ upgrade` workflow (`.github/workflows/vendor-upgrade.yml`) can be 
 ```dockerfile
 # Build stage: Go + git + bash
 FROM golang:X.Y.Z-alpine AS builder
-# Vendors typescript-go, builds the binary
+# Vendors the TypeScript Go port (tsc/), builds the binary
 
 # Runtime stage: Alpine + git
 FROM alpine:3.23
@@ -328,7 +330,7 @@ internal/
   tsparse/
     tsparse.go                   # TypeScript parser (imports, exports, symbols)
 install.sh                       # Standalone binary installer
-vendor-tsgo.sh                   # Vendor script for typescript-go
-TSGO_COMMIT                      # Pinned typescript-go commit hash
+vendor-tsgo.sh                   # Vendor script for the TypeScript Go port (microsoft/TypeScript tsc/)
+TSGO_COMMIT                      # Pinned microsoft/TypeScript commit hash
 Dockerfile                       # Multi-stage Docker build
 ```
