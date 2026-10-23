@@ -11,7 +11,7 @@ require (
 )
 
 require (
-	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
