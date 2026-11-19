@@ -16,6 +16,7 @@ Install ${BINARY} binary.
 
 Environment:
   BINDIR     Installation directory (default: /usr/local/bin)
+  GH_TOKEN   Optional GitHub token for the latest-release API lookup (avoids rate limits)
 
 Examples:
   $0              # install latest
@@ -58,11 +59,18 @@ resolve_version() {
     echo "$1"
     return
   fi
-  # GitHub redirects /releases/latest to the latest tag; grab it from the JSON response
-  tag=$(curl -sSL "https://api.github.com/repos/${OWNER}/${REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+  # GitHub redirects /releases/latest to the latest tag; grab it from the JSON response.
+  # Authenticate when GH_TOKEN is set — unauthenticated calls are limited to 60 req/h per IP.
+  api_url="https://api.github.com/repos/${OWNER}/${REPO}/releases/latest"
+  if [ -n "${GH_TOKEN:-}" ]; then
+    response=$(curl -sSL -H "Authorization: Bearer ${GH_TOKEN}" "$api_url")
+  else
+    response=$(curl -sSL "$api_url")
+  fi
+  tag=$(echo "$response" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
   if [ -z "$tag" ]; then
     echo "error: could not determine latest release" >&2
+    echo "$response" | grep '"message"' >&2 || true
     exit 1
   fi
   echo "$tag"
