@@ -23,7 +23,7 @@ func MergeBase(branch string) (string, error) {
 	ref := branch
 	base, err := Cmd("merge-base", "HEAD", ref)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to identify merge-base/divergence-point between HEAD and %s: %w", ref, err)
 	}
 
 	head, err := Cmd("rev-parse", "HEAD")
@@ -48,9 +48,12 @@ func MergeBase(branch string) (string, error) {
 		if err != nil {
 			return base, nil
 		}
+		// No silent fallback to base here: base == HEAD, so diffing against it
+		// would report no changes at all. A failure here usually means shallow
+		// history cut HEAD off from the target branch.
 		realBase, err := Cmd("merge-base", head, firstParent)
 		if err != nil {
-			return base, nil
+			return "", fmt.Errorf("failed to identify merge-base/divergence-point between %s and %s: %w", head, firstParent, err)
 		}
 		return realBase, nil
 	}
