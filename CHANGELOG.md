@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.11] - 2026-11-20
+
+### Fixed
+- `detect` now fails (stderr + exit 1) when the merge-base / divergence point cannot be identified, instead of silently reporting no changes. For an already-merged HEAD, `--compare-branch` resolution finds the merge commit and runs `git merge-base HEAD <merge>^1`; when that failed (typically shallow history cutting HEAD off from the target branch), it fell back to HEAD itself, so `git diff` against HEAD was empty and `detect` printed `[]` with exit 0. Both `git merge-base` calls now return `failed to identify merge-base/divergence-point between …: <git error>`.
+
 ## [0.26.10] - 2026-11-19
 
 ### Changed
@@ -503,6 +508,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.26.11]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.10...v0.26.11
 [0.26.10]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.9...v0.26.10
 [0.26.9]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.8...v0.26.9
 [0.26.8]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.7...v0.26.8
