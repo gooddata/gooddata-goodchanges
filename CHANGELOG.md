@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.13] - 2026-11-25
+
+### Changed
+- Upgrade vendored TypeScript Go port (tsc/) to [`502a981024b7`](https://github.com/microsoft/TypeScript/commit/502a981024b79219b447ed5f376a529df50118e3)
+
 ## [0.26.12] - 2026-11-21
 
 ### Changed
@@ -513,6 +518,7 @@ Together these keep genuine import-time changes flagged while eliminating the la
 - Multi-stage Docker build
 - Automated vendor upgrade workflow
 
+[0.26.13]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.12...v0.26.13
 [0.26.12]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.11...v0.26.12
 [0.26.11]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.10...v0.26.11
 [0.26.10]: https://github.com/gooddata/gooddata-goodchanges/compare/v0.26.9...v0.26.10
